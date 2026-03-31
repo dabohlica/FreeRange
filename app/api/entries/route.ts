@@ -42,8 +42,11 @@ export async function POST(req: NextRequest) {
 
   if (!date) return NextResponse.json({ error: 'Date is required' }, { status: 400 })
 
-  const author = await prisma.user.findFirst({ where: { role: 'ADMIN' } })
-  if (!author) return NextResponse.json({ error: 'No admin user found' }, { status: 500 })
+  const author = await prisma.user.upsert({
+    where: { id: 'system-admin' },
+    update: {},
+    create: { id: 'system-admin', email: 'admin@traveltrace.local', password: 'n/a', role: 'ADMIN' },
+  })
 
   const resolvedTitle = (title as string | undefined)?.trim() || autoTitle(date, city, country)
 
