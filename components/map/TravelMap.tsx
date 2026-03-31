@@ -262,9 +262,6 @@ function buildMarkerEl(entry: Entry, onClick: () => void): HTMLElement {
     width: 44px;
     height: 52px;
     cursor: pointer;
-    filter: drop-shadow(0 4px 8px rgba(0,0,0,0.25));
-    transition: filter 0.2s ease, transform 0.2s ease;
-    transform-origin: bottom center;
   `
 
   // Pin body (diamond square)
@@ -278,6 +275,7 @@ function buildMarkerEl(entry: Entry, onClick: () => void): HTMLElement {
     background: #171717;
     border: 2px solid white;
     overflow: hidden;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
   `
 
   if (firstImage) {
@@ -315,17 +313,16 @@ function buildMarkerEl(entry: Entry, onClick: () => void): HTMLElement {
   wrap.appendChild(pin)
   wrap.appendChild(tip)
 
-  // Hover: scale from bottom anchor — no z-index on inner el
+  // Hover: only change visual properties that don't affect layout/position
   wrap.addEventListener('mouseenter', () => {
-    wrap.style.transform = 'scale(1.18)'
-    wrap.style.filter = 'drop-shadow(0 8px 16px rgba(0,0,0,0.35))'
-    // Elevate the whole Mapbox marker container
+    pin.style.borderColor = '#d4af37'
+    pin.style.boxShadow = '0 6px 20px rgba(0,0,0,0.4)'
     const container = wrap.parentElement
     if (container) container.style.zIndex = '10'
   })
   wrap.addEventListener('mouseleave', () => {
-    wrap.style.transform = 'scale(1)'
-    wrap.style.filter = 'drop-shadow(0 4px 8px rgba(0,0,0,0.25))'
+    pin.style.borderColor = 'white'
+    pin.style.boxShadow = ''
     const container = wrap.parentElement
     if (container) container.style.zIndex = ''
   })

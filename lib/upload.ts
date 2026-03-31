@@ -57,8 +57,9 @@ async function saveToSupabase(
 
   if (error) throw new Error(`Supabase upload failed: ${error.message}`)
 
-  const { data } = supabase.storage.from('media').getPublicUrl(filename)
-  return { filename, url: data.publicUrl }
+  // Return an authenticated API route instead of the public Supabase URL
+  // so images are only accessible to logged-in users
+  return { filename, url: `/api/media/url/${filename}` }
 }
 
 async function saveToLocal(
