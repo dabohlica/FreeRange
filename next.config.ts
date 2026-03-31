@@ -3,8 +3,10 @@ import type { NextConfig } from 'next'
 const nextConfig: NextConfig = {
   output: 'standalone',
   images: {
-    remotePatterns: [],
-    formats: ['image/avif', 'image/webp'],
+    unoptimized: true,
+    remotePatterns: [
+      { protocol: 'https', hostname: '*.supabase.co' },
+    ],
   },
   experimental: {
     serverActions: {
