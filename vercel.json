@@ -1,9 +1,5 @@
 {
   "framework": "nextjs",
   "buildCommand": "prisma generate && prisma db push --skip-generate && next build",
-  "installCommand": "npm install",
-  "env": {
-    "NEXT_PUBLIC_MAPBOX_TOKEN": "@next_public_mapbox_token",
-    "NEXT_PUBLIC_APP_URL": "@next_public_app_url"
-  }
+  "installCommand": "npm install"
 }
