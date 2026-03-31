@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: travel
+      POSTGRES_PASSWORD: travel_secret
+      POSTGRES_DB: travel_journal
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U travel -d travel_journal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://travel:travel_secret@postgres:5432/travel_journal
+      JWT_SECRET: ${JWT_SECRET:-change-me-to-a-secure-random-string-32-chars}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      VIEWER_PASSWORD: ${VIEWER_PASSWORD:-travel}
+      NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      PAJ_GPS_SHARE_URL: ${PAJ_GPS_SHARE_URL:-}
+    volumes:
+      - uploads:/app/public/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  uploads:

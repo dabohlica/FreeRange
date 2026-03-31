@@ -1,0 +1,121 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String?
+  role      Role     @default(ADMIN)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entries Entry[]
+
+  @@map("users")
+}
+
+model Entry {
+  id          String    @id @default(cuid())
+  title       String
+  description String?   @db.Text
+  date        DateTime
+  latitude    Float?
+  longitude   Float?
+  altitude    Float?
+  city        String?
+  country     String?
+  tripId      String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  authorId String
+  author   User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  media    Media[]
+  trip     Trip?    @relation(fields: [tripId], references: [id])
+
+  @@index([date])
+  @@index([latitude, longitude])
+  @@map("entries")
+}
+
+model Media {
+  id        String    @id @default(cuid())
+  filename  String
+  url       String
+  type      MediaType
+  size      Int
+  width     Int?
+  height    Int?
+  latitude  Float?
+  longitude Float?
+  altitude  Float?
+  takenAt   DateTime?
+  createdAt DateTime  @default(now())
+
+  entryId String
+  entry   Entry  @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([entryId])
+  @@map("media")
+}
+
+model Location {
+  id         String   @id @default(cuid())
+  latitude   Float
+  longitude  Float
+  altitude   Float?
+  speed      Float?
+  accuracy   Float?
+  source     String   @default("manual")
+  recordedAt DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([recordedAt])
+  @@map("locations")
+}
+
+model LiveLocation {
+  id        String   @id @default("singleton")
+  latitude  Float
+  longitude Float
+  altitude  Float?
+  speed     Float?
+  accuracy  Float?
+  source    String   @default("manual")
+  updatedAt DateTime @updatedAt
+
+  @@map("live_location")
+}
+
+model Trip {
+  id          String    @id @default(cuid())
+  name        String
+  description String?   @db.Text
+  startDate   DateTime?
+  endDate     DateTime?
+  coverImage  String?
+  color       String    @default("#3B82F6")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  entries Entry[]
+
+  @@map("trips")
+}
+
+enum Role {
+  ADMIN
+  VIEWER
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
