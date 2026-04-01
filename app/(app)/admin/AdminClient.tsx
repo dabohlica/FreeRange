@@ -191,6 +191,11 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
   // null = closed, 'entry' = single form, number = bulk group index
   const [pickerTarget, setPickerTarget]   = useState<'entry' | number | null>(null)
 
+  // ── Bulk selection + delete ──────────────────────────────────────────────
+  const [selectedIds, setSelectedIds]     = useState<Set<string>>(new Set())
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null) // inline confirm for single
+  const [bulkDeleting, setBulkDeleting]   = useState(false)
+
   const [locationForm, setLocationForm]   = useState({ latitude: '', longitude: '', altitude: '' })
   const [locationSaving, setLocationSaving] = useState(false)
   const [tripForm, setTripForm]           = useState({ name: '', description: '', color: '#3B82F6' })
@@ -314,21 +319,56 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
     setTab('new-entry')
   }
 
-  async function handleDeleteEntry(id: string) {
-    if (!confirm('Delete this entry and all its media?')) return
+  async function deleteEntry(id: string): Promise<boolean> {
     const res = await fetch(`/api/entries/${id}`, { method: 'DELETE' })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       alert(`Delete failed: ${data.error || res.status}`)
-      return
+      return false
     }
-    setEntries(prev => prev.filter(e => e.id !== id))
+    return true
+  }
+
+  async function handleDeleteEntry(id: string) {
+    if (pendingDeleteId !== id) { setPendingDeleteId(id); return }
+    setPendingDeleteId(null)
+    if (await deleteEntry(id)) {
+      setEntries(prev => prev.filter(e => e.id !== id))
+      setSelectedIds(prev => { const n = new Set(prev); n.delete(id); return n })
+    }
+  }
+
+  async function handleBulkDelete() {
+    if (bulkDeleting || selectedIds.size === 0) return
+    setBulkDeleting(true)
+    const ids = Array.from(selectedIds)
+    for (const id of ids) {
+      await deleteEntry(id)
+    }
+    setEntries(prev => prev.filter(e => !ids.includes(e.id)))
+    setSelectedIds(new Set())
+    setBulkDeleting(false)
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds(prev => {
+      const n = new Set(prev)
+      n.has(id) ? n.delete(id) : n.add(id)
+      return n
+    })
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === entries.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(entries.map(e => e.id)))
+    }
   }
 
   async function handleDeleteMedia(mediaId: string, entryId: string) {
-    if (!confirm('Delete this photo?')) return
-    await fetch(`/api/media/${mediaId}`, { method: 'DELETE' })
-    setEntries(prev => prev.map(e => e.id === entryId ? { ...e, media: e.media.filter(m => m.id !== mediaId) } : e))
+    const res = await fetch(`/api/media/${mediaId}`, { method: 'DELETE' })
+    if (res.ok) setEntries(prev => prev.map(e => e.id === entryId ? { ...e, media: e.media.filter(m => m.id !== mediaId) } : e))
   }
 
   // ── Bulk create ───────────────────────────────────────────────────────────
@@ -423,41 +463,98 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
 
         {/* ── Entries ── */}
         {tab === 'entries' && (
-          <div className="space-y-4">
+          <div className="space-y-3">
             {entries.length === 0 && <div className="text-center py-16 text-[#a3a3a3]">No entries yet. Create your first entry!</div>}
-            {entries.map(entry => (
-              <div key={entry.id} className="bg-white rounded-2xl border border-[#e5e5e5] p-5 hover:border-[#d4d4d4] transition-colors">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-[#171717]">{entry.title}</h3>
-                    <div className="flex flex-wrap items-center gap-3 mt-1">
-                      <span className="text-xs text-[#a3a3a3]">{formatDate(entry.date)}</span>
-                      {(entry.city || entry.country) && <span className="text-xs text-[#737373]">{[entry.city, entry.country].filter(Boolean).join(', ')}</span>}
-                      {entry.trip && <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: `${entry.trip.color}20`, color: entry.trip.color }}>{entry.trip.name}</span>}
-                      <span className="text-xs text-[#a3a3a3]">{entry.media.length} file{entry.media.length !== 1 ? 's' : ''}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button onClick={() => handleEditEntry(entry)} className="p-2 rounded-lg text-[#737373] hover:text-[#171717] hover:bg-[#f5f5f4] transition-colors cursor-pointer" title="Edit">
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                    </button>
-                    <button onClick={() => handleDeleteEntry(entry.id)} className="p-2 rounded-lg text-[#ef4444]/60 hover:text-[#ef4444] hover:bg-[#ef4444]/5 transition-colors cursor-pointer" title="Delete">
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-                    </button>
-                  </div>
-                </div>
-                {entry.media.length > 0 && (
-                  <div className="flex gap-1.5 mt-4 overflow-x-auto pb-1">
-                    {entry.media.map(m => (
-                      <div key={m.id} className="relative w-14 h-14 shrink-0 rounded-lg overflow-hidden bg-[#f5f5f4] group">
-                        {m.type === 'IMAGE' ? <Image src={m.url} alt={m.filename} fill sizes="56px" className="object-cover" /> : <div className="w-full h-full bg-[#171717] flex items-center justify-center"><svg width="16" height="16" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>}
-                        <button onClick={() => handleDeleteMedia(m.id, entry.id)} className="absolute inset-0 bg-black/0 hover:bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-200 cursor-pointer">
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+
+            {/* Bulk action bar */}
+            {entries.length > 0 && (
+              <div className="flex items-center justify-between gap-3 pb-1">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.size === entries.length && entries.length > 0}
+                    onChange={toggleSelectAll}
+                    className="w-4 h-4 rounded border-[#d4d4d4] accent-[#171717] cursor-pointer"
+                  />
+                  <span className="text-sm text-[#737373]">
+                    {selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Select all'}
+                  </span>
+                </label>
+
+                {selectedIds.size > 0 && (
+                  <div className="flex items-center gap-2">
+                    {pendingDeleteId === 'bulk' ? (
+                      <>
+                        <span className="text-sm text-[#ef4444]">Delete {selectedIds.size} entr{selectedIds.size !== 1 ? 'ies' : 'y'}?</span>
+                        <button onClick={() => { setPendingDeleteId(null) }} className="px-3 py-1.5 rounded-lg text-sm border border-[#e5e5e5] text-[#737373] hover:text-[#171717] transition-colors cursor-pointer">Cancel</button>
+                        <button onClick={async () => { setPendingDeleteId(null); await handleBulkDelete() }} disabled={bulkDeleting}
+                          className="px-3 py-1.5 rounded-lg text-sm bg-[#ef4444] text-white font-medium hover:bg-[#dc2626] disabled:opacity-50 transition-colors cursor-pointer">
+                          {bulkDeleting ? 'Deleting…' : 'Confirm'}
                         </button>
-                      </div>
-                    ))}
+                      </>
+                    ) : (
+                      <button onClick={() => setPendingDeleteId('bulk')}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-[#ef4444] border border-[#ef4444]/30 hover:bg-[#ef4444]/5 transition-colors cursor-pointer">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                        Delete {selectedIds.size}
+                      </button>
+                    )}
                   </div>
                 )}
+              </div>
+            )}
+
+            {entries.map(entry => (
+              <div key={entry.id} className={`bg-white rounded-2xl border p-5 transition-colors ${selectedIds.has(entry.id) ? 'border-[#171717]' : 'border-[#e5e5e5] hover:border-[#d4d4d4]'}`}>
+                <div className="flex items-start gap-3">
+                  {/* Checkbox */}
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(entry.id)}
+                    onChange={() => { toggleSelect(entry.id); setPendingDeleteId(null) }}
+                    className="mt-1 w-4 h-4 rounded border-[#d4d4d4] accent-[#171717] shrink-0 cursor-pointer"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-semibold text-[#171717]">{entry.title}</h3>
+                        <div className="flex flex-wrap items-center gap-3 mt-1">
+                          <span className="text-xs text-[#a3a3a3]">{formatDate(entry.date)}</span>
+                          {(entry.city || entry.country) && <span className="text-xs text-[#737373]">{[entry.city, entry.country].filter(Boolean).join(', ')}</span>}
+                          {entry.trip && <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: `${entry.trip.color}20`, color: entry.trip.color }}>{entry.trip.name}</span>}
+                          <span className="text-xs text-[#a3a3a3]">{entry.media.length} file{entry.media.length !== 1 ? 's' : ''}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button onClick={() => handleEditEntry(entry)} className="p-2 rounded-lg text-[#737373] hover:text-[#171717] hover:bg-[#f5f5f4] transition-colors cursor-pointer" title="Edit">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                        </button>
+                        {pendingDeleteId === entry.id ? (
+                          <div className="flex items-center gap-1">
+                            <button onClick={() => setPendingDeleteId(null)} className="px-2 py-1 rounded-lg text-xs text-[#737373] hover:bg-[#f5f5f4] transition-colors cursor-pointer">Cancel</button>
+                            <button onClick={() => handleDeleteEntry(entry.id)} className="px-2 py-1 rounded-lg text-xs bg-[#ef4444] text-white font-medium hover:bg-[#dc2626] transition-colors cursor-pointer">Delete</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => { setPendingDeleteId(entry.id); setSelectedIds(new Set()) }} className="p-2 rounded-lg text-[#ef4444]/50 hover:text-[#ef4444] hover:bg-[#ef4444]/5 transition-colors cursor-pointer" title="Delete">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {entry.media.length > 0 && (
+                      <div className="flex gap-1.5 mt-3 overflow-x-auto pb-1">
+                        {entry.media.map(m => (
+                          <div key={m.id} className="relative w-14 h-14 shrink-0 rounded-lg overflow-hidden bg-[#f5f5f4] group">
+                            {m.type === 'IMAGE' ? <Image src={m.url} alt={m.filename} fill sizes="56px" className="object-cover" /> : <div className="w-full h-full bg-[#171717] flex items-center justify-center"><svg width="16" height="16" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>}
+                            <button onClick={() => handleDeleteMedia(m.id, entry.id)} className="absolute inset-0 bg-black/0 hover:bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-200 cursor-pointer">
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             ))}
           </div>
