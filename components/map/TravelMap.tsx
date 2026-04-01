@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 
@@ -43,16 +43,21 @@ function injectPulse() {
   document.head.appendChild(style)
 }
 
-export default function TravelMap({ entries, liveLocation, onEntryClick }: TravelMapProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const mapRef        = useRef<mapboxgl.Map | null>(null)
-  // Map from entry.id → { marker, entry }
-  const markerMapRef  = useRef<Map<string, { marker: mapboxgl.Marker; entry: Entry }>>(new Map())
-  const liveMarkerRef = useRef<mapboxgl.Marker | null>(null)
-  const [mapLoaded, setMapLoaded]   = useState(false)
-  const SOURCE_ID = 'entries-source'
+const SOURCE_ID = 'entries-source'
 
-  // ── 1. Init map ────────────────────────────────────────────────────────────
+export default function TravelMap({ entries, liveLocation, onEntryClick }: TravelMapProps) {
+  const containerRef  = useRef<HTMLDivElement>(null)
+  const mapRef        = useRef<mapboxgl.Map | null>(null)
+  const liveMarkerRef = useRef<mapboxgl.Marker | null>(null)
+  // Keep a live reference to entries so GL event callbacks always see current data
+  const entriesRef    = useRef<Entry[]>(entries)
+  const onClickRef    = useRef(onEntryClick)
+
+  // Sync refs on every render
+  entriesRef.current = entries
+  onClickRef.current = onEntryClick
+
+  // ── 1. Init map ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
@@ -69,42 +74,18 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
 
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'bottom-right')
     map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-left')
-    map.on('load', () => setMapLoaded(true))
-    mapRef.current = map
 
-    return () => { map.remove(); mapRef.current = null }
-  }, [])
-
-  // ── 2. Entries: GeoJSON clusters + HTML markers ────────────────────────────
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map || !mapLoaded) return
-
-    const validEntries = entries.filter(e => e.latitude != null && e.longitude != null)
-
-    // Build GeoJSON feature collection
-    const geojson: GeoJSON.FeatureCollection = {
-      type: 'FeatureCollection',
-      features: validEntries.map(e => ({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [e.longitude!, e.latitude!] },
-        properties: { id: e.id },
-      })),
-    }
-
-    // ── Add / update GeoJSON source ──
-    if (map.getSource(SOURCE_ID)) {
-      ;(map.getSource(SOURCE_ID) as mapboxgl.GeoJSONSource).setData(geojson)
-    } else {
+    map.on('load', () => {
+      // ── GeoJSON source (with clustering) ──
       map.addSource(SOURCE_ID, {
         type: 'geojson',
-        data: geojson,
+        data: buildGeojson(entriesRef.current),
         cluster: true,
         clusterMaxZoom: 13,
         clusterRadius: 60,
       })
 
-      // Cluster bubble
+      // ── Cluster bubble ──
       map.addLayer({
         id: 'clusters',
         type: 'circle',
@@ -119,7 +100,7 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
         },
       })
 
-      // Cluster count label
+      // ── Cluster count label ──
       map.addLayer({
         id: 'cluster-count',
         type: 'symbol',
@@ -133,16 +114,37 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
         paint: { 'text-color': '#ffffff' },
       })
 
-      // Invisible layer used only for queryRenderedFeatures
+      // ── Individual point dot (GL-rendered — no HTML markers, no visibility sync) ──
       map.addLayer({
         id: 'unclustered-points',
         type: 'circle',
         source: SOURCE_ID,
         filter: ['!', ['has', 'point_count']],
-        paint: { 'circle-opacity': 0, 'circle-radius': 1 },
+        paint: {
+          'circle-color': '#171717',
+          'circle-radius': 8,
+          'circle-stroke-width': 2.5,
+          'circle-stroke-color': '#ffffff',
+          'circle-opacity': 0.92,
+        },
       })
 
-      // Zoom into cluster on click
+      // ── Hover: enlarge point ──
+      map.addLayer({
+        id: 'unclustered-points-hover',
+        type: 'circle',
+        source: SOURCE_ID,
+        filter: ['==', 'id', ''],   // nothing selected initially
+        paint: {
+          'circle-color': '#404040',
+          'circle-radius': 10,
+          'circle-stroke-width': 2.5,
+          'circle-stroke-color': '#ffffff',
+          'circle-opacity': 1,
+        },
+      })
+
+      // ── Cluster click → expand ──
       map.on('click', 'clusters', (e) => {
         const features = map.queryRenderedFeatures(e.point, { layers: ['clusters'] })
         if (!features.length) return
@@ -157,77 +159,57 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
         )
       })
 
+      // ── Point click → select entry ──
+      map.on('click', 'unclustered-points', (e) => {
+        const features = map.queryRenderedFeatures(e.point, { layers: ['unclustered-points'] })
+        if (!features.length) return
+        const id = features[0].properties?.id as string
+        const entry = entriesRef.current.find(en => en.id === id)
+        if (!entry) return
+        onClickRef.current?.(entry)
+        map.flyTo({
+          center: [entry.longitude!, entry.latitude!],
+          zoom: Math.max(map.getZoom(), 10),
+          duration: 700,
+        })
+      })
+
+      // ── Point hover ──
+      map.on('mousemove', 'unclustered-points', (e) => {
+        const features = map.queryRenderedFeatures(e.point, { layers: ['unclustered-points'] })
+        const id = features[0]?.properties?.id ?? ''
+        map.setFilter('unclustered-points-hover', ['==', 'id', id])
+        map.getCanvas().style.cursor = id ? 'pointer' : ''
+      })
+      map.on('mouseleave', 'unclustered-points', () => {
+        map.setFilter('unclustered-points-hover', ['==', 'id', ''])
+        map.getCanvas().style.cursor = ''
+      })
+
+      // ── Cluster hover ──
       map.on('mouseenter', 'clusters', () => { map.getCanvas().style.cursor = 'pointer' })
       map.on('mouseleave', 'clusters', () => { map.getCanvas().style.cursor = '' })
-    }
 
-    // ── Remove HTML markers no longer in entries ──
-    const validIds = new Set(validEntries.map(e => e.id))
-    markerMapRef.current.forEach((val, id) => {
-      if (!validIds.has(id)) { val.marker.remove(); markerMapRef.current.delete(id) }
+      // Fit to initial entries
+      fitEntries(map, entriesRef.current)
     })
 
-    // ── Add / update HTML markers for each entry ──
-    validEntries.forEach(entry => {
-      if (markerMapRef.current.has(entry.id)) {
-        // Update stored entry reference (media may have changed)
-        markerMapRef.current.get(entry.id)!.entry = entry
-        return
-      }
+    mapRef.current = map
+    return () => { map.remove(); mapRef.current = null }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-      const el = buildMarkerEl(entry, () => {
-        onEntryClick?.(entry)
-        map.flyTo({ center: [entry.longitude!, entry.latitude!], zoom: Math.max(map.getZoom(), 10), duration: 700 })
-      })
-
-      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
-        .setLngLat([entry.longitude!, entry.latitude!])
-        .addTo(map)
-
-      markerMapRef.current.set(entry.id, { marker, entry })
-    })
-
-    // ── Toggle marker visibility based on cluster state ──
-    const syncMarkers = () => {
-      if (!map.getLayer('unclustered-points')) return
-      // Use CSS pixel dimensions (offsetWidth/Height), not canvas backing-store
-      // dimensions (canvas.width/height which are scaled by devicePixelRatio)
-      const container = map.getContainer()
-      const w = container.offsetWidth
-      const h = container.offsetHeight
-      const unclustered = map.queryRenderedFeatures([[0, 0], [w, h]], { layers: ['unclustered-points'] })
-      const visibleIds = new Set(unclustered.map(f => f.properties?.id as string))
-      markerMapRef.current.forEach((val, id) => {
-        val.marker.getElement().style.display = visibleIds.has(id) ? 'block' : 'none'
-      })
-    }
-
-    // Sync every frame during zoom/pan so markers track clusters smoothly,
-    // not just after the animation ends (idle)
-    map.on('zoom', syncMarkers)
-    map.on('move', syncMarkers)
-    map.on('idle', syncMarkers)
-
-    // ── Fit bounds ──
-    if (validEntries.length === 1) {
-      map.flyTo({ center: [validEntries[0].longitude!, validEntries[0].latitude!], zoom: 8, duration: 900 })
-    } else if (validEntries.length > 1) {
-      const bounds = new mapboxgl.LngLatBounds()
-      validEntries.forEach(e => bounds.extend([e.longitude!, e.latitude!]))
-      map.fitBounds(bounds, { padding: 80, duration: 1000, maxZoom: 10 })
-    }
-
-    return () => {
-      map.off('zoom', syncMarkers)
-      map.off('move', syncMarkers)
-      map.off('idle', syncMarkers)
-    }
-  }, [entries, mapLoaded, onEntryClick])
-
-  // ── 3. Live location marker ────────────────────────────────────────────────
+  // ── 2. Sync entries data into the GL source ──────────────────────────────────
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !mapLoaded) return
+    if (!map || !map.getSource(SOURCE_ID)) return
+    ;(map.getSource(SOURCE_ID) as mapboxgl.GeoJSONSource).setData(buildGeojson(entries))
+  }, [entries])
+
+  // ── 3. Live location marker ──────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
     liveMarkerRef.current?.remove()
     liveMarkerRef.current = null
     if (!liveLocation) return
@@ -243,7 +225,7 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
     liveMarkerRef.current = new mapboxgl.Marker({ element: el })
       .setLngLat([liveLocation.longitude, liveLocation.latitude])
       .addTo(map)
-  }, [liveLocation, mapLoaded])
+  }, [liveLocation])
 
   return (
     <div ref={containerRef} className="w-full h-full relative">
@@ -259,82 +241,26 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
   )
 }
 
-// ── Marker DOM builder ─────────────────────────────────────────────────────
-function buildMarkerEl(entry: Entry, onClick: () => void): HTMLElement {
-  const firstImage = entry.media.find(m => m.type === 'IMAGE')
-
-  // Outer wrapper: positions the pin tip at the bottom anchor point
-  const wrap = document.createElement('div')
-  wrap.style.cssText = `
-    position: relative;
-    width: 44px;
-    height: 52px;
-    cursor: pointer;
-  `
-
-  // Pin body (diamond square)
-  const pin = document.createElement('div')
-  pin.style.cssText = `
-    position: absolute;
-    top: 0; left: 2px;
-    width: 40px; height: 40px;
-    border-radius: 50% 50% 4px 50%;
-    transform: rotate(-45deg);
-    background: #171717;
-    border: 2px solid white;
-    overflow: hidden;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-  `
-
-  if (firstImage) {
-    const img = document.createElement('div')
-    img.style.cssText = `
-      position: absolute; inset: 0;
-      transform: rotate(45deg) scale(1.45);
-      background-image: url('${firstImage.url}');
-      background-size: cover;
-      background-position: center;
-    `
-    pin.appendChild(img)
-  } else {
-    const dot = document.createElement('div')
-    dot.style.cssText = `
-      position: absolute; inset: 0;
-      display: flex; align-items: center; justify-content: center;
-    `
-    dot.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:#d4af37;transform:rotate(45deg)"></div>`
-    pin.appendChild(dot)
+function buildGeojson(entries: Entry[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: entries
+      .filter(e => e.latitude != null && e.longitude != null)
+      .map(e => ({
+        type: 'Feature' as const,
+        geometry: { type: 'Point' as const, coordinates: [e.longitude!, e.latitude!] },
+        properties: { id: e.id },
+      })),
   }
+}
 
-  // Tip triangle
-  const tip = document.createElement('div')
-  tip.style.cssText = `
-    position: absolute;
-    bottom: 0; left: 50%;
-    transform: translateX(-50%);
-    width: 0; height: 0;
-    border-left: 7px solid transparent;
-    border-right: 7px solid transparent;
-    border-top: 13px solid #171717;
-  `
-
-  wrap.appendChild(pin)
-  wrap.appendChild(tip)
-
-  // Hover: only change visual properties that don't affect layout/position
-  wrap.addEventListener('mouseenter', () => {
-    pin.style.borderColor = '#d4af37'
-    pin.style.boxShadow = '0 6px 20px rgba(0,0,0,0.4)'
-    const container = wrap.parentElement
-    if (container) container.style.zIndex = '10'
-  })
-  wrap.addEventListener('mouseleave', () => {
-    pin.style.borderColor = 'white'
-    pin.style.boxShadow = ''
-    const container = wrap.parentElement
-    if (container) container.style.zIndex = ''
-  })
-  wrap.addEventListener('click', (e) => { e.stopPropagation(); onClick() })
-
-  return wrap
+function fitEntries(map: mapboxgl.Map, entries: Entry[]) {
+  const valid = entries.filter(e => e.latitude != null && e.longitude != null)
+  if (valid.length === 1) {
+    map.flyTo({ center: [valid[0].longitude!, valid[0].latitude!], zoom: 8, duration: 900 })
+  } else if (valid.length > 1) {
+    const bounds = new mapboxgl.LngLatBounds()
+    valid.forEach(e => bounds.extend([e.longitude!, e.latitude!]))
+    map.fitBounds(bounds, { padding: 80, duration: 1000, maxZoom: 10 })
+  }
 }
