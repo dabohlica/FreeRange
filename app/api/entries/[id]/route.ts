@@ -63,6 +63,11 @@ export async function DELETE(
   if (session?.role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const { id } = await params
-  await prisma.entry.delete({ where: { id } })
+  try {
+    await prisma.entry.delete({ where: { id } })
+  } catch (err) {
+    console.error('Entry delete failed:', err)
+    return NextResponse.json({ error: String(err) }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
 }

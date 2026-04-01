@@ -43,7 +43,9 @@ type Tab = 'entries' | 'new-entry' | 'bulk' | 'trips' | 'location'
 async function extractExifFromFile(file: File): Promise<{ lat?: number; lng?: number; date?: Date }> {
   try {
     const exifr = (await import('exifr')).default
-    const data = await exifr.parse(file, { gps: true, exif: true, pick: ['GPSLatitude', 'GPSLongitude', 'DateTimeOriginal'] })
+    // Do NOT use `pick` for GPS fields — omitting GPSLatitudeRef/GPSLongitudeRef
+    // causes exifr to drop the sign, placing Western locations in the Mediterranean.
+    const data = await exifr.parse(file, { gps: true, exif: true })
     if (!data) return {}
     return {
       lat: data.latitude  ?? undefined,
@@ -274,11 +276,11 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         entry = await res.json()
       }
 
-      if (uploadFiles.length > 0) {
-        setUploadProgress(`Uploading ${uploadFiles.length} file(s)…`)
+      for (let fi = 0; fi < uploadFiles.length; fi++) {
+        setUploadProgress(`Uploading file ${fi + 1} of ${uploadFiles.length}…`)
         const form = new FormData()
         form.append('entryId', entry.id)
-        uploadFiles.forEach(f => form.append('files', f))
+        form.append('files', uploadFiles[fi])
         await fetch('/api/upload', { method: 'POST', body: form })
       }
 
@@ -314,9 +316,13 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
 
   async function handleDeleteEntry(id: string) {
     if (!confirm('Delete this entry and all its media?')) return
-    await fetch(`/api/entries/${id}`, { method: 'DELETE' })
+    const res = await fetch(`/api/entries/${id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      alert(`Delete failed: ${data.error || res.status}`)
+      return
+    }
     setEntries(prev => prev.filter(e => e.id !== id))
-    router.refresh()
   }
 
   async function handleDeleteMedia(mediaId: string, entryId: string) {
@@ -351,11 +357,14 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         if (!entryRes.ok) continue
         const entry = await entryRes.json()
 
-        setBulkProgress(`Uploading ${g.files.length} photo(s) for: ${g.title}…`)
-        const form = new FormData()
-        form.append('entryId', entry.id)
-        g.files.forEach(f => form.append('files', f))
-        await fetch('/api/upload', { method: 'POST', body: form })
+        // Upload one file at a time to avoid Vercel's 10s function timeout
+        for (let fi = 0; fi < g.files.length; fi++) {
+          setBulkProgress(`Group ${i + 1}/${bulkGroups.length} · file ${fi + 1}/${g.files.length}: ${g.title}…`)
+          const form = new FormData()
+          form.append('entryId', entry.id)
+          form.append('files', g.files[fi])
+          await fetch('/api/upload', { method: 'POST', body: form })
+        }
       }
 
       setBulkGroups([])
