@@ -49,7 +49,8 @@ function injectPulse() {
 }
 
 // ── Draw a circular pin onto a canvas ────────────────────────────────────────
-async function buildPinCanvas(imgUrl: string | null): Promise<HTMLCanvasElement> {
+// Returns ImageData — the format map.addImage() actually accepts
+async function buildPinSprite(imgUrl: string | null): Promise<ImageData> {
   const canvas = document.createElement('canvas')
   canvas.width  = PIN_SIZE
   canvas.height = PIN_SIZE + TIP_HEIGHT
@@ -113,15 +114,15 @@ async function buildPinCanvas(imgUrl: string | null): Promise<HTMLCanvasElement>
   ctx.fillStyle = '#171717'
   ctx.fill()
 
-  return canvas
+  return ctx.getImageData(0, 0, canvas.width, canvas.height)
 }
 
 // Register sprites for entries that don't yet have one loaded
 async function loadSprites(map: mapboxgl.Map, entries: Entry[]) {
   // Default (no-photo) pin
   if (!map.hasImage(SPRITE_DEFAULT)) {
-    const canvas = await buildPinCanvas(null)
-    map.addImage(SPRITE_DEFAULT, canvas as unknown as HTMLImageElement, { pixelRatio: 1 })
+    const imageData = await buildPinSprite(null)
+    map.addImage(SPRITE_DEFAULT, imageData)
   }
 
   await Promise.all(
@@ -130,9 +131,9 @@ async function loadSprites(map: mapboxgl.Map, entries: Entry[]) {
       .map(async (entry) => {
         if (map.hasImage(entry.id)) return  // already loaded
         const firstImg = entry.media.find(m => m.type === 'IMAGE')
-        const canvas = await buildPinCanvas(firstImg?.url ?? null)
+        const imageData = await buildPinSprite(firstImg?.url ?? null)
         if (!map.hasImage(entry.id)) {  // double-check (race)
-          map.addImage(entry.id, canvas as unknown as HTMLImageElement, { pixelRatio: 1 })
+          map.addImage(entry.id, imageData)
         }
       })
   )
@@ -242,11 +243,7 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
         source: SOURCE_ID,
         filter: ['!', ['has', 'point_count']],
         layout: {
-          'icon-image': [
-            'case',
-            ['image', ['get', 'spriteId']], ['get', 'spriteId'],
-            SPRITE_DEFAULT,
-          ],
+          'icon-image': ['get', 'spriteId'],
           'icon-anchor':           'bottom',
           'icon-allow-overlap':    true,
           'icon-ignore-placement': true,
