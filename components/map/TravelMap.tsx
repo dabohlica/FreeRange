@@ -49,8 +49,8 @@ function injectPulse() {
 }
 
 // ── Draw a circular pin onto a canvas ────────────────────────────────────────
-// Returns ImageData — the format map.addImage() actually accepts
-async function buildPinSprite(imgUrl: string | null): Promise<ImageData> {
+// Returns HTMLImageElement loaded from canvas data URL — compatible with Mapbox GL JS v3
+async function buildPinSprite(imgUrl: string | null): Promise<HTMLImageElement> {
   const canvas = document.createElement('canvas')
   canvas.width  = PIN_SIZE
   canvas.height = PIN_SIZE + TIP_HEIGHT
@@ -114,32 +114,15 @@ async function buildPinSprite(imgUrl: string | null): Promise<ImageData> {
   ctx.fillStyle = '#171717'
   ctx.fill()
 
-  return ctx.getImageData(0, 0, canvas.width, canvas.height)
+  // Return HTMLImageElement loaded from canvas data URL (not ImageData)
+  const result = new Image(canvas.width, canvas.height)
+  return new Promise<HTMLImageElement>((resolve) => {
+    result.onload = () => resolve(result)
+    result.src = canvas.toDataURL()
+  })
 }
 
-// Register sprites for entries that don't yet have one loaded
-async function loadSprites(map: mapboxgl.Map, entries: Entry[]) {
-  // Default (no-photo) pin
-  if (!map.hasImage(SPRITE_DEFAULT)) {
-    const imageData = await buildPinSprite(null)
-    map.addImage(SPRITE_DEFAULT, imageData)
-  }
-
-  await Promise.all(
-    entries
-      .filter(e => e.latitude != null && e.longitude != null)
-      .map(async (entry) => {
-        if (map.hasImage(entry.id)) return  // already loaded
-        const firstImg = entry.media.find(m => m.type === 'IMAGE')
-        const imageData = await buildPinSprite(firstImg?.url ?? null)
-        if (!map.hasImage(entry.id)) {  // double-check (race)
-          map.addImage(entry.id, imageData)
-        }
-      })
-  )
-}
-
-function buildGeojson(entries: Entry[]): GeoJSON.FeatureCollection {
+function buildGeojson(entries: Entry[], loadedSprites?: Set<string>): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
     features: entries
@@ -149,7 +132,7 @@ function buildGeojson(entries: Entry[]): GeoJSON.FeatureCollection {
         geometry: { type: 'Point' as const, coordinates: [e.longitude!, e.latitude!] },
         properties: {
           id: e.id,
-          spriteId: e.id,  // map.hasImage will be true after loadSprites
+          spriteId: (loadedSprites?.has(e.id)) ? e.id : SPRITE_DEFAULT,
         },
       })),
   }
@@ -177,6 +160,36 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
   entriesRef.current = entries
   onClickRef.current = onEntryClick
 
+  // Helper: return set of entry IDs that have a loaded sprite on the map
+  function getLoadedSpriteIds(map: mapboxgl.Map, ents: Entry[]): Set<string> {
+    const loaded = new Set<string>()
+    for (const e of ents) {
+      if (map.hasImage(e.id)) loaded.add(e.id)
+    }
+    return loaded
+  }
+
+  // Fire-and-forget progressive photo sprite loading
+  function loadSpritesProgressive(map: mapboxgl.Map, ents: Entry[]) {
+    for (const entry of ents.filter(e => e.latitude != null && e.longitude != null)) {
+      if (map.hasImage(entry.id)) continue
+      const firstImg = entry.media.find(m => m.type === 'IMAGE')
+      if (!firstImg) continue  // no photo — stays on SPRITE_DEFAULT
+
+      buildPinSprite(firstImg.url).then(img => {
+        if (map.hasImage(entry.id)) return  // race guard
+        map.addImage(entry.id, img)
+        // Update GeoJSON to point this feature at its new sprite
+        const src = map.getSource(SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
+        if (!src) return
+        const currentEntries = entriesRef.current
+        src.setData(buildGeojson(currentEntries, getLoadedSpriteIds(map, currentEntries)))
+      }).catch(() => {
+        // Silently degrade to default pin
+      })
+    }
+  }
+
   // ── 1. Init map ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
@@ -196,12 +209,15 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
     map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-left')
 
     map.on('load', async () => {
-      // Load sprites first, then add source + layers
-      await loadSprites(map, entriesRef.current)
+      // Register default sprite first (fast — no network fetch)
+      if (!map.hasImage(SPRITE_DEFAULT)) {
+        const defaultImg = await buildPinSprite(null)
+        map.addImage(SPRITE_DEFAULT, defaultImg)
+      }
 
       map.addSource(SOURCE_ID, {
         type: 'geojson',
-        data: buildGeojson(entriesRef.current),
+        data: buildGeojson(entriesRef.current),  // all pins start as SPRITE_DEFAULT
         cluster: true,
         clusterMaxZoom: 13,
         clusterRadius: 60,
@@ -249,6 +265,10 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
           'icon-ignore-placement': true,
           'icon-size':             1,
         },
+        paint: {
+          'icon-opacity': 1,
+          'icon-opacity-transition': { duration: 200, delay: 0 },
+        },
       })
 
       // ── Cluster click → expand ──
@@ -284,6 +304,9 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
       map.on('mouseleave', 'clusters',   () => { map.getCanvas().style.cursor = '' })
 
       fitEntries(map, entriesRef.current)
+
+      // Progressive photo sprite loading (fire-and-forget, non-blocking)
+      loadSpritesProgressive(map, entriesRef.current)
     })
 
     mapRef.current = map
@@ -291,15 +314,17 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ── 2. Sync entries → reload sprites + update GeoJSON source ───────────────
+  // ── 2. Sync entries → update GeoJSON source + kick off new sprite loads ─────
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.getSource(SOURCE_ID)) return
 
-    loadSprites(map, entries).then(() => {
-      if (!map.getSource(SOURCE_ID)) return
-      ;(map.getSource(SOURCE_ID) as mapboxgl.GeoJSONSource).setData(buildGeojson(entries))
-    })
+    // Update GeoJSON with current loaded states
+    const loaded = getLoadedSpriteIds(map, entries)
+    ;(map.getSource(SOURCE_ID) as mapboxgl.GeoJSONSource).setData(buildGeojson(entries, loaded))
+
+    // Kick off loading for any new entries
+    loadSpritesProgressive(map, entries)
   }, [entries])
 
   // ── 3. Live location marker ────────────────────────────────────────────────
