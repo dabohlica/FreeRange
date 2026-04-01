@@ -1,10 +1,13 @@
 'use client'
 
 import { useState, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { useDropzone } from 'react-dropzone'
 import { formatDate, formatFileSize } from '@/lib/utils'
+
+const LocationPicker = dynamic(() => import('@/components/admin/LocationPicker'), { ssr: false })
 
 interface Media {
   id: string; url: string; type: string; filename: string
@@ -183,6 +186,8 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
   const [bulkProgress, setBulkProgress]   = useState<string | null>(null)
 
   const [geoLocating, setGeoLocating]     = useState(false)
+  // null = closed, 'entry' = single form, number = bulk group index
+  const [pickerTarget, setPickerTarget]   = useState<'entry' | number | null>(null)
 
   const [locationForm, setLocationForm]   = useState({ latitude: '', longitude: '', altitude: '' })
   const [locationSaving, setLocationSaving] = useState(false)
@@ -516,7 +521,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                   <label className="block text-sm font-medium text-[#404040] mb-1.5">Longitude</label>
                   <input type="number" step="any" value={entryForm.longitude} onChange={e => setEntryForm(p => ({ ...p, longitude: e.target.value }))} placeholder="Auto from EXIF" className={inputCls} />
                 </div>
-                <div className="sm:col-span-2">
+                <div className="sm:col-span-2 flex items-center gap-4 flex-wrap">
                   <button type="button" disabled={geoLocating} onClick={async () => {
                     setGeoLocating(true)
                     try {
@@ -525,9 +530,13 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                       setExifDetected(true)
                     } catch { alert('Could not get location. Please allow location access in your browser.') }
                     finally { setGeoLocating(false) }
-                  }} className="flex items-center gap-2 text-sm text-[#3b82f6] hover:text-[#2563eb] disabled:opacity-50 transition-colors cursor-pointer">
+                  }} className="flex items-center gap-1.5 text-sm text-[#3b82f6] hover:text-[#2563eb] disabled:opacity-50 transition-colors cursor-pointer">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8" strokeDasharray="2 4"/></svg>
-                    {geoLocating ? 'Getting location…' : (entryForm.latitude ? 'Update with current location' : 'Use current location (if EXIF missing)')}
+                    {geoLocating ? 'Getting location…' : 'Use current location'}
+                  </button>
+                  <button type="button" onClick={() => setPickerTarget('entry')} className="flex items-center gap-1.5 text-sm text-[#737373] hover:text-[#171717] transition-colors cursor-pointer">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
+                    Pick on map
                   </button>
                 </div>
                 <div>
@@ -682,7 +691,10 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                             } catch { alert('Could not get location.') }
                             finally { setGeoLocating(false) }
                           }} className="text-xs text-[#3b82f6] hover:text-[#2563eb] disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap">
-                            {geoLocating ? 'Getting…' : '⊕ Use current location'}
+                            {geoLocating ? 'Getting…' : 'Use current location'}
+                          </button>
+                          <button type="button" onClick={() => setPickerTarget(gi)} className="text-xs text-[#737373] hover:text-[#171717] transition-colors cursor-pointer whitespace-nowrap">
+                            Pick on map
                           </button>
                         </div>
                       </div>
@@ -754,6 +766,23 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
           </div>
         )}
       </div>
+
+      {/* ── Location Picker Modal ── */}
+      {pickerTarget !== null && (
+        <LocationPicker
+          initialLat={pickerTarget === 'entry' && entryForm.latitude ? parseFloat(entryForm.latitude) : undefined}
+          initialLng={pickerTarget === 'entry' && entryForm.longitude ? parseFloat(entryForm.longitude) : undefined}
+          onClose={() => setPickerTarget(null)}
+          onConfirm={(lat, lng) => {
+            if (pickerTarget === 'entry') {
+              setEntryForm(p => ({ ...p, latitude: lat.toFixed(6), longitude: lng.toFixed(6) }))
+            } else {
+              setBulkGroups(prev => prev.map((g, i) => i === pickerTarget ? { ...g, latitude: lat.toFixed(6), longitude: lng.toFixed(6) } : g))
+            }
+            setPickerTarget(null)
+          }}
+        />
+      )}
     </main>
   )
 }
