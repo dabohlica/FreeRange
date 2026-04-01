@@ -162,6 +162,33 @@ async function groupFiles(files: File[]): Promise<BulkGroup[]> {
   })
 }
 
+// ── Parallel upload with concurrency cap ─────────────────────────────────────
+async function uploadInParallel(
+  files: File[],
+  entryId: string,
+  onProgress: (done: number, total: number) => void,
+  concurrency = 4
+): Promise<void> {
+  let done = 0
+  const total = files.length
+  for (let i = 0; i < files.length; i += concurrency) {
+    const batch = files.slice(i, i + concurrency)
+    await Promise.all(batch.map(async (file) => {
+      const form = new FormData()
+      form.append('entryId', entryId)
+      form.append('files', file)
+      try {
+        const res = await fetch('/api/upload', { method: 'POST', body: form })
+        if (!res.ok) console.error(`Upload failed for ${file.name}: ${res.status}`)
+      } catch (err) {
+        console.error(`Upload error for ${file.name}:`, err)
+      }
+      done++
+      onProgress(done, total)
+    }))
+  }
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 export default function AdminClient({ initialEntries, initialTrips }: { initialEntries: Entry[]; initialTrips: Trip[] }) {
   const router = useRouter()
@@ -281,13 +308,9 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         entry = await res.json()
       }
 
-      for (let fi = 0; fi < uploadFiles.length; fi++) {
-        setUploadProgress(`Uploading file ${fi + 1} of ${uploadFiles.length}…`)
-        const form = new FormData()
-        form.append('entryId', entry.id)
-        form.append('files', uploadFiles[fi])
-        await fetch('/api/upload', { method: 'POST', body: form })
-      }
+      await uploadInParallel(uploadFiles, entry.id, (done, total) =>
+        setUploadProgress(`Uploading ${done}/${total} files…`)
+      )
 
       setEntryForm(blankForm())
       setUploadFiles([])
@@ -342,9 +365,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
     if (bulkDeleting || selectedIds.size === 0) return
     setBulkDeleting(true)
     const ids = Array.from(selectedIds)
-    for (const id of ids) {
-      await deleteEntry(id)
-    }
+    await Promise.allSettled(ids.map(id => deleteEntry(id)))
     setEntries(prev => prev.filter(e => !ids.includes(e.id)))
     setSelectedIds(new Set())
     setBulkDeleting(false)
@@ -397,14 +418,9 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         if (!entryRes.ok) continue
         const entry = await entryRes.json()
 
-        // Upload one file at a time to avoid Vercel's 10s function timeout
-        for (let fi = 0; fi < g.files.length; fi++) {
-          setBulkProgress(`Group ${i + 1}/${bulkGroups.length} · file ${fi + 1}/${g.files.length}: ${g.title}…`)
-          const form = new FormData()
-          form.append('entryId', entry.id)
-          form.append('files', g.files[fi])
-          await fetch('/api/upload', { method: 'POST', body: form })
-        }
+        await uploadInParallel(g.files, entry.id, (done, total) =>
+          setBulkProgress(`Group ${i + 1}/${bulkGroups.length} · ${done}/${total} files: ${g.title}…`)
+        )
       }
 
       setBulkGroups([])

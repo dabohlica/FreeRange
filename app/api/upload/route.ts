@@ -32,44 +32,51 @@ export async function POST(req: NextRequest) {
       continue
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer())
-    const { filename, url } = await saveUploadedFile(buffer, file.name)
+    try {
+      const buffer = Buffer.from(await file.arrayBuffer())
+      const { filename, url } = await saveUploadedFile(buffer, file.name)
 
-    const exif = await extractExif(buffer)
+      const exif = await extractExif(buffer)
 
-    const mediaType = getMediaType(file.name)
-    const media = await prisma.media.create({
-      data: {
-        filename,
-        url,
-        type: mediaType,
-        size: file.size,
-        width: exif.width,
-        height: exif.height,
-        latitude: exif.latitude,
-        longitude: exif.longitude,
-        altitude: exif.altitude,
-        takenAt: exif.takenAt,
-        entryId,
-      },
-    })
-
-    // If the entry has no location yet but the photo has GPS, update the entry
-    if (!entry.latitude && exif.latitude && exif.longitude) {
-      const geo = await reverseGeocode(exif.latitude, exif.longitude)
-      await prisma.entry.update({
-        where: { id: entryId },
+      const mediaType = getMediaType(file.name)
+      const media = await prisma.media.create({
         data: {
+          filename,
+          url,
+          type: mediaType,
+          size: file.size,
+          width: exif.width,
+          height: exif.height,
           latitude: exif.latitude,
           longitude: exif.longitude,
           altitude: exif.altitude,
-          ...(geo.city && { city: geo.city }),
-          ...(geo.country && { country: geo.country }),
+          takenAt: exif.takenAt,
+          entryId,
         },
       })
-    }
 
-    results.push({ success: true, media })
+      // If the entry has no location yet but the photo has GPS, update it in the background
+      // (non-blocking — reverseGeocode is a ~300ms Mapbox API call, don't wait for it)
+      if (!entry.latitude && exif.latitude && exif.longitude) {
+        reverseGeocode(exif.latitude, exif.longitude).then(geo => {
+          prisma.entry.update({
+            where: { id: entryId },
+            data: {
+              latitude: exif.latitude!,
+              longitude: exif.longitude!,
+              altitude: exif.altitude,
+              ...(geo.city && { city: geo.city }),
+              ...(geo.country && { country: geo.country }),
+            },
+          }).catch(() => {})
+        }).catch(() => {})
+      }
+
+      results.push({ success: true, media })
+    } catch (err) {
+      console.error(`Upload failed for ${file.name}:`, err)
+      results.push({ error: String(err), filename: file.name })
+    }
   }
 
   return NextResponse.json({ results })
