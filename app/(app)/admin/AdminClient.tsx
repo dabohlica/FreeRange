@@ -50,6 +50,18 @@ async function extractExifFromFile(file: File): Promise<{ lat?: number; lng?: nu
   } catch { return {} }
 }
 
+// ── Browser geolocation ──────────────────────────────────────────────────────
+function getCurrentLocation(): Promise<{ lat: number; lng: number }> {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) { reject(new Error('Geolocation not supported')); return }
+    navigator.geolocation.getCurrentPosition(
+      p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      err => reject(err),
+      { enableHighAccuracy: true, timeout: 10000 }
+    )
+  })
+}
+
 // ── Distance between two lat/lng points in km (Haversine) ───────────────────
 function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371
@@ -169,6 +181,8 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
   const [bulkAnalyzing, setBulkAnalyzing] = useState(false)
   const [bulkSubmitting, setBulkSubmitting] = useState(false)
   const [bulkProgress, setBulkProgress]   = useState<string | null>(null)
+
+  const [geoLocating, setGeoLocating]     = useState(false)
 
   const [locationForm, setLocationForm]   = useState({ latitude: '', longitude: '', altitude: '' })
   const [locationSaving, setLocationSaving] = useState(false)
@@ -502,6 +516,20 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                   <label className="block text-sm font-medium text-[#404040] mb-1.5">Longitude</label>
                   <input type="number" step="any" value={entryForm.longitude} onChange={e => setEntryForm(p => ({ ...p, longitude: e.target.value }))} placeholder="Auto from EXIF" className={inputCls} />
                 </div>
+                <div className="sm:col-span-2">
+                  <button type="button" disabled={geoLocating} onClick={async () => {
+                    setGeoLocating(true)
+                    try {
+                      const { lat, lng } = await getCurrentLocation()
+                      setEntryForm(p => ({ ...p, latitude: lat.toFixed(6), longitude: lng.toFixed(6) }))
+                      setExifDetected(true)
+                    } catch { alert('Could not get location. Please allow location access in your browser.') }
+                    finally { setGeoLocating(false) }
+                  }} className="flex items-center gap-2 text-sm text-[#3b82f6] hover:text-[#2563eb] disabled:opacity-50 transition-colors cursor-pointer">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8" strokeDasharray="2 4"/></svg>
+                    {geoLocating ? 'Getting location…' : (entryForm.latitude ? 'Update with current location' : 'Use current location (if EXIF missing)')}
+                  </button>
+                </div>
                 <div>
                   <label className="block text-sm font-medium text-[#404040] mb-1.5">City</label>
                   <input type="text" value={entryForm.city} onChange={e => setEntryForm(p => ({ ...p, city: e.target.value }))} placeholder="Paris" className={inputCls} />
@@ -568,6 +596,26 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
 
                 {bulkProgress && <p className="text-sm text-[#737373] bg-[#f5f5f4] rounded-xl px-4 py-2.5">{bulkProgress}</p>}
 
+                {/* Banner: stamp all GPS-less groups with current location */}
+                {bulkGroups.some(g => !g.latitude) && (
+                  <div className="flex items-center justify-between gap-4 bg-[#eff6ff] border border-[#bfdbfe] rounded-xl px-4 py-3">
+                    <p className="text-sm text-[#1d4ed8]">
+                      {bulkGroups.filter(g => !g.latitude).length} group{bulkGroups.filter(g => !g.latitude).length !== 1 ? 's' : ''} have no GPS (phone upload strips EXIF).
+                    </p>
+                    <button type="button" disabled={geoLocating} onClick={async () => {
+                      setGeoLocating(true)
+                      try {
+                        const { lat, lng } = await getCurrentLocation()
+                        setBulkGroups(prev => prev.map(g => g.latitude ? g : { ...g, latitude: lat.toFixed(6), longitude: lng.toFixed(6) }))
+                      } catch { alert('Could not get location. Please allow location access in your browser.') }
+                      finally { setGeoLocating(false) }
+                    }} className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1d4ed8] text-white text-xs font-medium hover:bg-[#1e40af] disabled:opacity-50 transition-colors cursor-pointer">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+                      {geoLocating ? 'Getting…' : 'Stamp all with current location'}
+                    </button>
+                  </div>
+                )}
+
                 <div className="space-y-4">
                   {bulkGroups.map((group, gi) => (
                     <div key={group.key} className="bg-white rounded-2xl border border-[#e5e5e5] p-5">
@@ -621,11 +669,22 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                           <label className="block text-xs font-medium text-[#404040] mb-1">Date</label>
                           <input type="date" value={group.date} onChange={e => setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, date: e.target.value } : g))} className={inputCls} />
                         </div>
-                        {(group.latitude || group.longitude) && (
-                          <div className="sm:col-span-2">
-                            <p className="text-xs text-[#a3a3a3]">GPS: {group.latitude}, {group.longitude}</p>
-                          </div>
-                        )}
+                        <div className="sm:col-span-2 flex items-center gap-3">
+                          {group.latitude
+                            ? <p className="text-xs text-[#a3a3a3]">GPS: {group.latitude}, {group.longitude}</p>
+                            : <p className="text-xs text-[#f59e0b]">No GPS in EXIF</p>
+                          }
+                          <button type="button" disabled={geoLocating} onClick={async () => {
+                            setGeoLocating(true)
+                            try {
+                              const { lat, lng } = await getCurrentLocation()
+                              setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, latitude: lat.toFixed(6), longitude: lng.toFixed(6) } : g))
+                            } catch { alert('Could not get location.') }
+                            finally { setGeoLocating(false) }
+                          }} className="text-xs text-[#3b82f6] hover:text-[#2563eb] disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap">
+                            {geoLocating ? 'Getting…' : '⊕ Use current location'}
+                          </button>
+                        </div>
                       </div>
 
                       <button onClick={() => setBulkGroups(prev => prev.filter((_, i) => i !== gi))}
