@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createHash } from 'crypto'
 import { getSession } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { extractExif } from '@/lib/exif'
@@ -34,6 +35,15 @@ export async function POST(req: NextRequest) {
 
     try {
       const buffer = Buffer.from(await file.arrayBuffer())
+      const hash = createHash('sha256').update(buffer).digest('hex')
+
+      // Skip if this exact file was already uploaded
+      const existing = await prisma.media.findUnique({ where: { hash } })
+      if (existing) {
+        results.push({ skipped: true, reason: 'duplicate', media: existing })
+        continue
+      }
+
       const { filename, url } = await saveUploadedFile(buffer, file.name)
 
       const exif = await extractExif(buffer)
@@ -51,6 +61,7 @@ export async function POST(req: NextRequest) {
           longitude: exif.longitude,
           altitude: exif.altitude,
           takenAt: exif.takenAt,
+          hash,
           entryId,
         },
       })

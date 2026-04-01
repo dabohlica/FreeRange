@@ -58,6 +58,7 @@ model Media {
   longitude Float?
   altitude  Float?
   takenAt   DateTime?
+  hash      String?   @unique
   createdAt DateTime  @default(now())
 
   entryId String
