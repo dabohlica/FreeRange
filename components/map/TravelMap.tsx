@@ -27,6 +27,11 @@ interface TravelMapProps {
   onEntryClick?: (entry: Entry) => void
 }
 
+const SOURCE_ID  = 'entries-source'
+const PIN_SIZE   = 44   // circle diameter
+const TIP_HEIGHT = 11   // downward triangle
+const SPRITE_DEFAULT = '__default-pin__'
+
 // Inject pulse keyframe once
 let pulseInjected = false
 function injectPulse() {
@@ -43,21 +48,135 @@ function injectPulse() {
   document.head.appendChild(style)
 }
 
-const SOURCE_ID = 'entries-source'
+// ── Draw a circular pin onto a canvas ────────────────────────────────────────
+async function buildPinCanvas(imgUrl: string | null): Promise<HTMLCanvasElement> {
+  const canvas = document.createElement('canvas')
+  canvas.width  = PIN_SIZE
+  canvas.height = PIN_SIZE + TIP_HEIGHT
+  const ctx = canvas.getContext('2d')!
+  const cx = PIN_SIZE / 2
+  const cy = PIN_SIZE / 2
+  const r  = PIN_SIZE / 2 - 2
 
+  // ── Circle body ──
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+
+  if (imgUrl) {
+    try {
+      // Fetch through our auth proxy so the session cookie is sent
+      const res  = await fetch(imgUrl, { credentials: 'include' })
+      const blob = await res.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      await new Promise<void>((resolve, reject) => {
+        const img = new Image()
+        img.onload = () => {
+          ctx.save()
+          ctx.clip()
+          // Fill the circle background first
+          ctx.fillStyle = '#171717'
+          ctx.fillRect(0, 0, PIN_SIZE, PIN_SIZE)
+          // Draw photo scaled to fill
+          const scale = Math.max(PIN_SIZE / img.width, PIN_SIZE / img.height)
+          const sw = img.width  * scale
+          const sh = img.height * scale
+          ctx.drawImage(img, (PIN_SIZE - sw) / 2, (PIN_SIZE - sh) / 2, sw, sh)
+          ctx.restore()
+          URL.revokeObjectURL(blobUrl)
+          resolve()
+        }
+        img.onerror = () => { URL.revokeObjectURL(blobUrl); reject() }
+        img.src = blobUrl
+      })
+    } catch {
+      // Fallback: solid dark circle
+      ctx.fillStyle = '#171717'
+      ctx.fill()
+    }
+  } else {
+    ctx.fillStyle = '#171717'
+    ctx.fill()
+  }
+
+  // ── White border ──
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.strokeStyle = '#ffffff'
+  ctx.lineWidth   = 2.5
+  ctx.stroke()
+
+  // ── Downward tip ──
+  ctx.beginPath()
+  ctx.moveTo(cx - 5, PIN_SIZE - 1)
+  ctx.lineTo(cx + 5, PIN_SIZE - 1)
+  ctx.lineTo(cx,     PIN_SIZE + TIP_HEIGHT)
+  ctx.fillStyle = '#171717'
+  ctx.fill()
+
+  return canvas
+}
+
+// Register sprites for entries that don't yet have one loaded
+async function loadSprites(map: mapboxgl.Map, entries: Entry[]) {
+  // Default (no-photo) pin
+  if (!map.hasImage(SPRITE_DEFAULT)) {
+    const canvas = await buildPinCanvas(null)
+    map.addImage(SPRITE_DEFAULT, canvas as unknown as HTMLImageElement, { pixelRatio: 1 })
+  }
+
+  await Promise.all(
+    entries
+      .filter(e => e.latitude != null && e.longitude != null)
+      .map(async (entry) => {
+        if (map.hasImage(entry.id)) return  // already loaded
+        const firstImg = entry.media.find(m => m.type === 'IMAGE')
+        const canvas = await buildPinCanvas(firstImg?.url ?? null)
+        if (!map.hasImage(entry.id)) {  // double-check (race)
+          map.addImage(entry.id, canvas as unknown as HTMLImageElement, { pixelRatio: 1 })
+        }
+      })
+  )
+}
+
+function buildGeojson(entries: Entry[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: entries
+      .filter(e => e.latitude != null && e.longitude != null)
+      .map(e => ({
+        type: 'Feature' as const,
+        geometry: { type: 'Point' as const, coordinates: [e.longitude!, e.latitude!] },
+        properties: {
+          id: e.id,
+          spriteId: e.id,  // map.hasImage will be true after loadSprites
+        },
+      })),
+  }
+}
+
+function fitEntries(map: mapboxgl.Map, entries: Entry[]) {
+  const valid = entries.filter(e => e.latitude != null && e.longitude != null)
+  if (valid.length === 1) {
+    map.flyTo({ center: [valid[0].longitude!, valid[0].latitude!], zoom: 8, duration: 900 })
+  } else if (valid.length > 1) {
+    const bounds = new mapboxgl.LngLatBounds()
+    valid.forEach(e => bounds.extend([e.longitude!, e.latitude!]))
+    map.fitBounds(bounds, { padding: 80, duration: 1000, maxZoom: 10 })
+  }
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
 export default function TravelMap({ entries, liveLocation, onEntryClick }: TravelMapProps) {
   const containerRef  = useRef<HTMLDivElement>(null)
   const mapRef        = useRef<mapboxgl.Map | null>(null)
   const liveMarkerRef = useRef<mapboxgl.Marker | null>(null)
-  // Keep a live reference to entries so GL event callbacks always see current data
   const entriesRef    = useRef<Entry[]>(entries)
   const onClickRef    = useRef(onEntryClick)
 
-  // Sync refs on every render
   entriesRef.current = entries
   onClickRef.current = onEntryClick
 
-  // ── 1. Init map ──────────────────────────────────────────────────────────────
+  // ── 1. Init map ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
@@ -75,8 +194,10 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'bottom-right')
     map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-left')
 
-    map.on('load', () => {
-      // ── GeoJSON source (with clustering) ──
+    map.on('load', async () => {
+      // Load sprites first, then add source + layers
+      await loadSprites(map, entriesRef.current)
+
       map.addSource(SOURCE_ID, {
         type: 'geojson',
         data: buildGeojson(entriesRef.current),
@@ -114,33 +235,22 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
         paint: { 'text-color': '#ffffff' },
       })
 
-      // ── Individual point dot (GL-rendered — no HTML markers, no visibility sync) ──
+      // ── Individual entry pins (GL symbol layer — photo sprite or default) ──
       map.addLayer({
-        id: 'unclustered-points',
-        type: 'circle',
+        id: 'entry-pins',
+        type: 'symbol',
         source: SOURCE_ID,
         filter: ['!', ['has', 'point_count']],
-        paint: {
-          'circle-color': '#171717',
-          'circle-radius': 8,
-          'circle-stroke-width': 2.5,
-          'circle-stroke-color': '#ffffff',
-          'circle-opacity': 0.92,
-        },
-      })
-
-      // ── Hover: enlarge point ──
-      map.addLayer({
-        id: 'unclustered-points-hover',
-        type: 'circle',
-        source: SOURCE_ID,
-        filter: ['==', 'id', ''],   // nothing selected initially
-        paint: {
-          'circle-color': '#404040',
-          'circle-radius': 10,
-          'circle-stroke-width': 2.5,
-          'circle-stroke-color': '#ffffff',
-          'circle-opacity': 1,
+        layout: {
+          'icon-image': [
+            'case',
+            ['image', ['get', 'spriteId']], ['get', 'spriteId'],
+            SPRITE_DEFAULT,
+          ],
+          'icon-anchor':           'bottom',
+          'icon-allow-overlap':    true,
+          'icon-ignore-placement': true,
+          'icon-size':             1,
         },
       })
 
@@ -149,7 +259,7 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
         const features = map.queryRenderedFeatures(e.point, { layers: ['clusters'] })
         if (!features.length) return
         const clusterId = features[0].properties?.cluster_id as number
-        const coords = (features[0].geometry as GeoJSON.Point).coordinates as [number, number]
+        const coords    = (features[0].geometry as GeoJSON.Point).coordinates as [number, number]
         ;(map.getSource(SOURCE_ID) as mapboxgl.GeoJSONSource).getClusterExpansionZoom(
           clusterId,
           (err?: Error | null, zoom?: number | null) => {
@@ -159,38 +269,23 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
         )
       })
 
-      // ── Point click → select entry ──
-      map.on('click', 'unclustered-points', (e) => {
-        const features = map.queryRenderedFeatures(e.point, { layers: ['unclustered-points'] })
+      // ── Pin click → select entry ──
+      map.on('click', 'entry-pins', (e) => {
+        const features = map.queryRenderedFeatures(e.point, { layers: ['entry-pins'] })
         if (!features.length) return
-        const id = features[0].properties?.id as string
+        const id    = features[0].properties?.id as string
         const entry = entriesRef.current.find(en => en.id === id)
         if (!entry) return
         onClickRef.current?.(entry)
-        map.flyTo({
-          center: [entry.longitude!, entry.latitude!],
-          zoom: Math.max(map.getZoom(), 10),
-          duration: 700,
-        })
+        map.flyTo({ center: [entry.longitude!, entry.latitude!], zoom: Math.max(map.getZoom(), 10), duration: 700 })
       })
 
-      // ── Point hover ──
-      map.on('mousemove', 'unclustered-points', (e) => {
-        const features = map.queryRenderedFeatures(e.point, { layers: ['unclustered-points'] })
-        const id = features[0]?.properties?.id ?? ''
-        map.setFilter('unclustered-points-hover', ['==', 'id', id])
-        map.getCanvas().style.cursor = id ? 'pointer' : ''
-      })
-      map.on('mouseleave', 'unclustered-points', () => {
-        map.setFilter('unclustered-points-hover', ['==', 'id', ''])
-        map.getCanvas().style.cursor = ''
-      })
+      // ── Cursors ──
+      map.on('mouseenter', 'entry-pins', () => { map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'entry-pins', () => { map.getCanvas().style.cursor = '' })
+      map.on('mouseenter', 'clusters',   () => { map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'clusters',   () => { map.getCanvas().style.cursor = '' })
 
-      // ── Cluster hover ──
-      map.on('mouseenter', 'clusters', () => { map.getCanvas().style.cursor = 'pointer' })
-      map.on('mouseleave', 'clusters', () => { map.getCanvas().style.cursor = '' })
-
-      // Fit to initial entries
       fitEntries(map, entriesRef.current)
     })
 
@@ -199,14 +294,18 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ── 2. Sync entries data into the GL source ──────────────────────────────────
+  // ── 2. Sync entries → reload sprites + update GeoJSON source ───────────────
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.getSource(SOURCE_ID)) return
-    ;(map.getSource(SOURCE_ID) as mapboxgl.GeoJSONSource).setData(buildGeojson(entries))
+
+    loadSprites(map, entries).then(() => {
+      if (!map.getSource(SOURCE_ID)) return
+      ;(map.getSource(SOURCE_ID) as mapboxgl.GeoJSONSource).setData(buildGeojson(entries))
+    })
   }, [entries])
 
-  // ── 3. Live location marker ──────────────────────────────────────────────────
+  // ── 3. Live location marker ────────────────────────────────────────────────
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
@@ -239,28 +338,4 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
       )}
     </div>
   )
-}
-
-function buildGeojson(entries: Entry[]): GeoJSON.FeatureCollection {
-  return {
-    type: 'FeatureCollection',
-    features: entries
-      .filter(e => e.latitude != null && e.longitude != null)
-      .map(e => ({
-        type: 'Feature' as const,
-        geometry: { type: 'Point' as const, coordinates: [e.longitude!, e.latitude!] },
-        properties: { id: e.id },
-      })),
-  }
-}
-
-function fitEntries(map: mapboxgl.Map, entries: Entry[]) {
-  const valid = entries.filter(e => e.latitude != null && e.longitude != null)
-  if (valid.length === 1) {
-    map.flyTo({ center: [valid[0].longitude!, valid[0].latitude!], zoom: 8, duration: 900 })
-  } else if (valid.length > 1) {
-    const bounds = new mapboxgl.LngLatBounds()
-    valid.forEach(e => bounds.extend([e.longitude!, e.latitude!]))
-    map.fitBounds(bounds, { padding: 80, duration: 1000, maxZoom: 10 })
-  }
 }
