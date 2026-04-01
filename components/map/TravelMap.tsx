@@ -190,18 +190,22 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
     // ── Toggle marker visibility based on cluster state ──
     const syncMarkers = () => {
       if (!map.getLayer('unclustered-points')) return
-      const canvas = map.getCanvas()
-      const bounds: [mapboxgl.PointLike, mapboxgl.PointLike] = [
-        [0, 0],
-        [canvas.width, canvas.height],
-      ]
-      const unclustered = map.queryRenderedFeatures(bounds, { layers: ['unclustered-points'] })
+      // Use CSS pixel dimensions (offsetWidth/Height), not canvas backing-store
+      // dimensions (canvas.width/height which are scaled by devicePixelRatio)
+      const container = map.getContainer()
+      const w = container.offsetWidth
+      const h = container.offsetHeight
+      const unclustered = map.queryRenderedFeatures([[0, 0], [w, h]], { layers: ['unclustered-points'] })
       const visibleIds = new Set(unclustered.map(f => f.properties?.id as string))
       markerMapRef.current.forEach((val, id) => {
         val.marker.getElement().style.display = visibleIds.has(id) ? 'block' : 'none'
       })
     }
 
+    // Sync every frame during zoom/pan so markers track clusters smoothly,
+    // not just after the animation ends (idle)
+    map.on('zoom', syncMarkers)
+    map.on('move', syncMarkers)
     map.on('idle', syncMarkers)
 
     // ── Fit bounds ──
@@ -213,7 +217,11 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
       map.fitBounds(bounds, { padding: 80, duration: 1000, maxZoom: 10 })
     }
 
-    return () => { map.off('idle', syncMarkers) }
+    return () => {
+      map.off('zoom', syncMarkers)
+      map.off('move', syncMarkers)
+      map.off('idle', syncMarkers)
+    }
   }, [entries, mapLoaded, onEntryClick])
 
   // ── 3. Live location marker ────────────────────────────────────────────────
