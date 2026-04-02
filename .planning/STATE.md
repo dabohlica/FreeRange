@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 01-fix-map-pin-photo-thumbnails-p0/01-01-PLAN.md
-last_updated: "2026-04-01T20:29:39.823Z"
+stopped_at: Completed 02-bulk-upload-reliability-p0/02-04-PLAN.md
+last_updated: "2026-04-02T18:57:49.620Z"
 progress:
   total_phases: 4
-  completed_phases: 1
-  total_plans: 1
-  completed_plans: 1
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 2
 ---
 
 # Project State
@@ -47,14 +47,16 @@ Phase 1 Plan 01 executed. Map pin sprites fixed (HTMLImageElement via canvas.toD
 - **Phase 1 / Plan 01**: Use HTMLImageElement via canvas.toDataURL for Mapbox GL JS v3 map.addImage — ImageData renders blank
 - **Phase 1 / Plan 01**: loadSpritesProgressive fires-and-forgets per entry — map shows immediately with dark circles, photos swap in
 - **Phase 1 / Plan 01**: buildGeojson accepts optional loadedSprites Set — defaults to SPRITE_DEFAULT until sprite confirmed on map
+- [Phase 02-bulk-upload-reliability-p0]: getConcurrency helper uses D-09 thresholds: >10MB→2, >2MB→4, <=2MB→6 — per-group adaptive concurrency without cross-group parallelism
 
 ## Performance Metrics
 
 | Phase | Plan | Duration | Tasks | Files | Completed |
 |-------|------|----------|-------|-------|-----------|
 | 01-fix-map-pin-photo-thumbnails-p0 | 01 | 2min | 2 | 1 | 2026-04-01 |
+| Phase 02-bulk-upload-reliability-p0 P04 | 3 | 1 tasks | 1 files |
 
 ## Last Session
 
-- **Stopped at:** Completed 01-fix-map-pin-photo-thumbnails-p0/01-01-PLAN.md
+- **Stopped at:** Completed 02-bulk-upload-reliability-p0/02-04-PLAN.md
 - **Timestamp:** 2026-04-01T20:27:40Z
