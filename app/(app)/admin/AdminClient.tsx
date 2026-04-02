@@ -186,6 +186,38 @@ async function groupFiles(files: File[]): Promise<BulkGroup[]> {
   })
 }
 
+// ── Single-file upload with automatic retry ──────────────────────────────────
+// Returns 'done' | 'skipped' | 'failed'. Retries up to maxRetries times
+// with exponential backoff (500ms, 1000ms). Retries are silent.
+async function uploadWithRetry(
+  file: File,
+  entryId: string,
+  maxRetries = 2
+): Promise<'done' | 'skipped' | 'failed'> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      await new Promise(r => setTimeout(r, 500 * attempt))  // 500ms, 1000ms
+    }
+    try {
+      const form = new FormData()
+      form.append('entryId', entryId)
+      form.append('files', file)
+      const res = await fetch('/api/upload', { method: 'POST', body: form })
+      if (res.ok) {
+        const body = await res.json() as { results: Array<{ success?: boolean; skipped?: boolean; error?: string }> }
+        const result = body.results?.[0]
+        if (result?.success) return 'done'
+        if (result?.skipped) return 'skipped'
+        // Server returned ok but result indicates error — retry
+      }
+      // Non-ok HTTP status — retry
+    } catch {
+      // Network error — retry
+    }
+  }
+  return 'failed'
+}
+
 // ── Parallel upload with concurrency cap ─────────────────────────────────────
 async function uploadInParallel(
   files: File[],
@@ -204,37 +236,80 @@ async function uploadInParallel(
     const batch = files.slice(i, i + concurrency)
     inFlight = batch.length
     await Promise.all(batch.map(async (file) => {
-      const form = new FormData()
-      form.append('entryId', entryId)
-      form.append('files', file)
-      let fileStatus: FileUploadStatus['status'] = 'failed'
-      try {
-        const res = await fetch('/api/upload', { method: 'POST', body: form })
-        if (res.ok) {
-          const body = await res.json() as { results: Array<{ success?: boolean; skipped?: boolean; error?: string; filename?: string }> }
-          const result = body.results?.[0]
-          if (result?.success) {
-            fileStatus = 'done'
-          } else if (result?.skipped) {
-            fileStatus = 'skipped'
-          } else {
-            failedFiles.push(file.name)
-          }
-        } else {
-          failedFiles.push(file.name)
-        }
-      } catch {
-        failedFiles.push(file.name)
-      }
+      const fileStatus = await uploadWithRetry(file, entryId)
       if (fileStatus === 'done') done++
       else if (fileStatus === 'skipped') skipped++
-      else failed++
+      else { failed++; failedFiles.push(file.name) }
       inFlight--
       onProgress({ done, skipped, failed, uploading: inFlight, total })
     }))
   }
 
   return { done, skipped, failed, failedFiles }
+}
+
+// ── Post-upload Summary Modal ────────────────────────────────────────────────
+function UploadSummaryModal({
+  summary,
+  retrying,
+  onRetry,
+  onDismiss,
+}: {
+  summary: UploadSummary
+  retrying: boolean
+  onRetry: () => void
+  onDismiss: () => void
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+      <div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 space-y-4 shadow-xl">
+        <h2 className="text-base font-semibold text-[#171717]">Upload complete</h2>
+
+        {/* Counts */}
+        <div className="flex gap-4 text-sm">
+          <span className="text-[#171717]">✓ {summary.done} uploaded</span>
+          {summary.skipped > 0 && <span className="text-[#737373]">⊘ {summary.skipped} skipped</span>}
+          {summary.failed  > 0 && <span className="text-red-600">✗ {summary.failed} failed</span>}
+        </div>
+
+        {/* Failed file list */}
+        {summary.failedFiles.length > 0 && (
+          <div className="bg-[#f5f5f4] rounded-xl px-4 py-3 max-h-40 overflow-y-auto">
+            <p className="text-xs font-medium text-[#404040] mb-2">Failed files:</p>
+            <ul className="space-y-1">
+              {summary.failedFiles.map(name => (
+                <li key={name} className="text-xs text-red-600 truncate">{name}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-2 pt-1">
+          {summary.failed > 0 && (
+            <button
+              onClick={onRetry}
+              disabled={retrying}
+              className="flex-1 py-2.5 px-4 rounded-xl bg-[#171717] text-white font-medium text-sm hover:bg-[#404040] disabled:opacity-50 transition-colors cursor-pointer"
+            >
+              {retrying ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Retrying…
+                </span>
+              ) : 'Retry failed'}
+            </button>
+          )}
+          <button
+            onClick={onDismiss}
+            className="flex-1 py-2.5 px-4 rounded-xl border border-[#e5e5e5] text-[#737373] hover:text-[#171717] font-medium text-sm transition-colors cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -261,6 +336,9 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
   const [bulkAnalyzing, setBulkAnalyzing] = useState(false)
   const [bulkSubmitting, setBulkSubmitting] = useState(false)
   const [bulkProgress, setBulkProgress]   = useState<string | null>(null)
+  const [bulkSummary, setBulkSummary]     = useState<UploadSummary | null>(null)
+  const [retrying, setRetrying]           = useState(false)
+  const [retryQueue, setRetryQueue]       = useState<Array<{ file: File; entryId: string }>>([])
 
   const [geoLocating, setGeoLocating]     = useState(false)
   // null = closed, 'entry' = single form, number = bulk group index
@@ -444,6 +522,9 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
   async function handleBulkCreate() {
     if (!bulkGroups.length) return
     setBulkSubmitting(true)
+    let totalDone = 0, totalSkipped = 0, totalFailed = 0
+    const allFailedFiles: string[] = []
+    const allRetryQueue: Array<{ file: File; entryId: string }> = []
     try {
       for (let i = 0; i < bulkGroups.length; i++) {
         const g = bulkGroups[i]
@@ -466,17 +547,33 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         if (!entryRes.ok) continue
         const entry = await entryRes.json()
 
-        await uploadInParallel(g.files, entry.id, ({ done, total }) =>
+        const groupSummary = await uploadInParallel(g.files, entry.id, ({ done, total }) =>
           setBulkProgress(`Group ${i + 1}/${bulkGroups.length} · ${done}/${total} files: ${g.title}…`)
         )
+        totalDone    += groupSummary.done
+        totalSkipped += groupSummary.skipped
+        totalFailed  += groupSummary.failed
+        allFailedFiles.push(...groupSummary.failedFiles)
+        // Build retryQueue: map failed filenames back to File objects with their entryId
+        for (const name of groupSummary.failedFiles) {
+          const file = g.files.find(f => f.name === name)
+          if (file) allRetryQueue.push({ file, entryId: entry.id })
+        }
       }
 
-      setBulkGroups([])
-      setBulkProgress(null)
-      setTab('entries')
-      router.refresh()
-      const freshRes = await fetch('/api/entries')
-      if (freshRes.ok) setEntries(await freshRes.json())
+      // Show summary modal if there were any failures or skips (D-03, D-04)
+      if (totalFailed > 0 || totalSkipped > 0) {
+        setRetryQueue(allRetryQueue)
+        setBulkSummary({ done: totalDone, skipped: totalSkipped, failed: totalFailed, failedFiles: allFailedFiles })
+      } else {
+        // Everything succeeded cleanly — no modal, navigate immediately (D-04)
+        setBulkGroups([])
+        setBulkProgress(null)
+        setTab('entries')
+        router.refresh()
+        const freshRes = await fetch('/api/entries')
+        if (freshRes.ok) setEntries(await freshRes.json())
+      }
     } finally { setBulkSubmitting(false); setBulkProgress(null) }
   }
 
@@ -950,6 +1047,78 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
               setBulkGroups(prev => prev.map((g, i) => i === pickerTarget ? { ...g, latitude: lat.toFixed(6), longitude: lng.toFixed(6) } : g))
             }
             setPickerTarget(null)
+          }}
+        />
+      )}
+
+      {/* ── Upload Summary Modal ── */}
+      {bulkSummary && (
+        <UploadSummaryModal
+          summary={bulkSummary}
+          retrying={retrying}
+          onRetry={async () => {
+            if (!retryQueue.length) return
+            setRetrying(true)
+
+            // Group retryQueue by entryId so each entry's files upload together
+            const byEntry = retryQueue.reduce<Record<string, { files: File[]; entryId: string }>>((acc, { file, entryId }) => {
+              if (!acc[entryId]) acc[entryId] = { files: [], entryId }
+              acc[entryId].files.push(file)
+              return acc
+            }, {})
+
+            let retryDone = 0, retrySkipped = 0, retryFailed = 0
+            const retryFailedFiles: string[] = []
+            const newQueue: Array<{ file: File; entryId: string }> = []
+
+            for (const { files, entryId } of Object.values(byEntry)) {
+              // Real onProgress callback so counts update in place during retry (D-06)
+              const s = await uploadInParallel(files, entryId, ({ done, skipped, failed }) => {
+                setBulkSummary(prev => prev ? {
+                  ...prev,
+                  done:    (prev.done - retryFailed) + retryDone + done,
+                  skipped: prev.skipped + skipped,
+                  failed:  failed,
+                } : null)
+              })
+              retryDone    += s.done
+              retrySkipped += s.skipped
+              retryFailed  += s.failed
+              retryFailedFiles.push(...s.failedFiles)
+              for (const name of s.failedFiles) {
+                const file = files.find(f => f.name === name)
+                if (file) newQueue.push({ file, entryId })
+              }
+            }
+
+            setRetryQueue(newQueue)
+            // Set final counts after all retry groups complete
+            setBulkSummary(prev => prev ? {
+              done:        prev.done + retryDone,
+              skipped:     prev.skipped + retrySkipped,
+              failed:      retryFailed,
+              failedFiles: retryFailedFiles,
+            } : null)
+            setRetrying(false)
+
+            // Auto-close if all retries resolved (D-06)
+            if (retryFailed === 0) {
+              setBulkSummary(null)
+              setBulkGroups([])
+              setRetryQueue([])
+              setTab('entries')
+              router.refresh()
+              fetch('/api/entries').then(r => r.ok ? r.json() : null).then(d => d && setEntries(d))
+            }
+          }}
+          onDismiss={() => {
+            setBulkSummary(null)
+            setRetryQueue([])
+            setBulkGroups([])
+            setBulkProgress(null)
+            setTab('entries')
+            router.refresh()
+            fetch('/api/entries').then(r => r.ok ? r.json() : null).then(d => d && setEntries(d))
           }}
         />
       )}
