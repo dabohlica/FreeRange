@@ -186,6 +186,38 @@ async function groupFiles(files: File[]): Promise<BulkGroup[]> {
   })
 }
 
+// ── Single-file upload with automatic retry ──────────────────────────────────
+// Returns 'done' | 'skipped' | 'failed'. Retries up to maxRetries times
+// with exponential backoff (500ms, 1000ms). Retries are silent.
+async function uploadWithRetry(
+  file: File,
+  entryId: string,
+  maxRetries = 2
+): Promise<'done' | 'skipped' | 'failed'> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      await new Promise(r => setTimeout(r, 500 * attempt))  // 500ms, 1000ms
+    }
+    try {
+      const form = new FormData()
+      form.append('entryId', entryId)
+      form.append('files', file)
+      const res = await fetch('/api/upload', { method: 'POST', body: form })
+      if (res.ok) {
+        const body = await res.json() as { results: Array<{ success?: boolean; skipped?: boolean; error?: string }> }
+        const result = body.results?.[0]
+        if (result?.success) return 'done'
+        if (result?.skipped) return 'skipped'
+        // Server returned ok but result indicates error — retry
+      }
+      // Non-ok HTTP status — retry
+    } catch {
+      // Network error — retry
+    }
+  }
+  return 'failed'
+}
+
 // ── Parallel upload with concurrency cap ─────────────────────────────────────
 async function uploadInParallel(
   files: File[],
@@ -204,31 +236,10 @@ async function uploadInParallel(
     const batch = files.slice(i, i + concurrency)
     inFlight = batch.length
     await Promise.all(batch.map(async (file) => {
-      const form = new FormData()
-      form.append('entryId', entryId)
-      form.append('files', file)
-      let fileStatus: FileUploadStatus['status'] = 'failed'
-      try {
-        const res = await fetch('/api/upload', { method: 'POST', body: form })
-        if (res.ok) {
-          const body = await res.json() as { results: Array<{ success?: boolean; skipped?: boolean; error?: string; filename?: string }> }
-          const result = body.results?.[0]
-          if (result?.success) {
-            fileStatus = 'done'
-          } else if (result?.skipped) {
-            fileStatus = 'skipped'
-          } else {
-            failedFiles.push(file.name)
-          }
-        } else {
-          failedFiles.push(file.name)
-        }
-      } catch {
-        failedFiles.push(file.name)
-      }
+      const fileStatus = await uploadWithRetry(file, entryId)
       if (fileStatus === 'done') done++
       else if (fileStatus === 'skipped') skipped++
-      else failed++
+      else { failed++; failedFiles.push(file.name) }
       inFlight--
       onProgress({ done, skipped, failed, uploading: inFlight, total })
     }))
