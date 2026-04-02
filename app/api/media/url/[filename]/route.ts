@@ -36,6 +36,16 @@ export async function GET(
     return NextResponse.json({ error: 'File not found' }, { status: 404 })
   }
 
-  // Redirect to the signed URL (transparent to browser/img tags)
-  return NextResponse.redirect(data.signedUrl)
+  // Proxy the image bytes — redirect causes CORS failures for fetch() with credentials
+  const imageRes = await fetch(data.signedUrl)
+  if (!imageRes.ok) {
+    return NextResponse.json({ error: 'File not found' }, { status: 404 })
+  }
+  const buffer = await imageRes.arrayBuffer()
+  return new NextResponse(buffer, {
+    headers: {
+      'Content-Type': imageRes.headers.get('Content-Type') ?? 'image/jpeg',
+      'Cache-Control': 'private, max-age=3600',
+    },
+  })
 }
