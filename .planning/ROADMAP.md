@@ -15,10 +15,10 @@ Plans:
 ### Phase 2: Bulk Upload Reliability (P0)
 **Goal**: 40-photo bulk upload completes with zero silent drops.
 
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Plans:
-- [ ] 02-01-PLAN.md — Per-file result checking: rewrite uploadInParallel to read results[] and return UploadSummary
+- [x] 02-01-PLAN.md — Per-file result checking: rewrite uploadInParallel to read results[] and return UploadSummary
 - [ ] 02-02-PLAN.md — Retry logic + summary modal: silent 2× retry with backoff; post-upload modal with failed file list and inline retry
 - [ ] 02-03-PLAN.md — Progress UI: replace string bulkProgress with structured count summary bar (done · skipped · failed)
 - [ ] 02-04-PLAN.md — Adaptive concurrency: getConcurrency helper; small=6, medium=4, large=2
