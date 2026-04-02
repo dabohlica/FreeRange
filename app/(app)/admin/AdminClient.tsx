@@ -37,6 +37,30 @@ interface BulkGroup {
   tripId: string
 }
 
+// Per-file status from /api/upload response
+interface FileUploadStatus {
+  filename: string
+  status: 'done' | 'skipped' | 'failed'
+  error?: string
+}
+
+// Counts passed to onProgress callback during upload
+interface BulkUploadProgress {
+  done: number
+  skipped: number
+  failed: number
+  uploading: number  // files currently in-flight
+  total: number
+}
+
+// Return value of uploadInParallel
+interface UploadSummary {
+  done: number
+  skipped: number
+  failed: number
+  failedFiles: string[]  // filenames of permanently-failed files
+}
+
 type Tab = 'entries' | 'new-entry' | 'bulk' | 'trips' | 'location'
 
 // ── Client-side EXIF extraction ──────────────────────────────────────────────
@@ -166,27 +190,51 @@ async function groupFiles(files: File[]): Promise<BulkGroup[]> {
 async function uploadInParallel(
   files: File[],
   entryId: string,
-  onProgress: (done: number, total: number) => void,
+  onProgress: (progress: BulkUploadProgress) => void,
   concurrency = 4
-): Promise<void> {
+): Promise<UploadSummary> {
   let done = 0
+  let skipped = 0
+  let failed = 0
+  const failedFiles: string[] = []
   const total = files.length
+  let inFlight = 0
+
   for (let i = 0; i < files.length; i += concurrency) {
     const batch = files.slice(i, i + concurrency)
+    inFlight = batch.length
     await Promise.all(batch.map(async (file) => {
       const form = new FormData()
       form.append('entryId', entryId)
       form.append('files', file)
+      let fileStatus: FileUploadStatus['status'] = 'failed'
       try {
         const res = await fetch('/api/upload', { method: 'POST', body: form })
-        if (!res.ok) console.error(`Upload failed for ${file.name}: ${res.status}`)
-      } catch (err) {
-        console.error(`Upload error for ${file.name}:`, err)
+        if (res.ok) {
+          const body = await res.json() as { results: Array<{ success?: boolean; skipped?: boolean; error?: string; filename?: string }> }
+          const result = body.results?.[0]
+          if (result?.success) {
+            fileStatus = 'done'
+          } else if (result?.skipped) {
+            fileStatus = 'skipped'
+          } else {
+            failedFiles.push(file.name)
+          }
+        } else {
+          failedFiles.push(file.name)
+        }
+      } catch {
+        failedFiles.push(file.name)
       }
-      done++
-      onProgress(done, total)
+      if (fileStatus === 'done') done++
+      else if (fileStatus === 'skipped') skipped++
+      else failed++
+      inFlight--
+      onProgress({ done, skipped, failed, uploading: inFlight, total })
     }))
   }
+
+  return { done, skipped, failed, failedFiles }
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -308,7 +356,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         entry = await res.json()
       }
 
-      await uploadInParallel(uploadFiles, entry.id, (done, total) =>
+      await uploadInParallel(uploadFiles, entry.id, ({ done, total }) =>
         setUploadProgress(`Uploading ${done}/${total} files…`)
       )
 
@@ -418,7 +466,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         if (!entryRes.ok) continue
         const entry = await entryRes.json()
 
-        await uploadInParallel(g.files, entry.id, (done, total) =>
+        await uploadInParallel(g.files, entry.id, ({ done, total }) =>
           setBulkProgress(`Group ${i + 1}/${bulkGroups.length} · ${done}/${total} files: ${g.title}…`)
         )
       }
