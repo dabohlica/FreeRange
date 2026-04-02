@@ -162,6 +162,19 @@ async function groupFiles(files: File[]): Promise<BulkGroup[]> {
   })
 }
 
+// ── Adaptive concurrency ──────────────────────────────────────────────────────
+// Returns upload concurrency for a group based on the largest file (D-09).
+//   > 10MB  → 2  (large video/RAW — Vercel memory)
+//   > 2MB   → 4  (normal photos — existing default)
+//   ≤ 2MB   → 6  (small/web-optimised photos — safe to parallelize more)
+function getConcurrency(files: File[]): number {
+  const MB = 1024 * 1024
+  const maxSize = Math.max(...files.map(f => f.size))
+  if (maxSize > 10 * MB) return 2
+  if (maxSize > 2  * MB) return 4
+  return 6
+}
+
 // ── Parallel upload with concurrency cap ─────────────────────────────────────
 async function uploadInParallel(
   files: File[],
@@ -418,9 +431,10 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         if (!entryRes.ok) continue
         const entry = await entryRes.json()
 
+        const concurrency = getConcurrency(g.files)
         await uploadInParallel(g.files, entry.id, (done, total) =>
           setBulkProgress(`Group ${i + 1}/${bulkGroups.length} · ${done}/${total} files: ${g.title}…`)
-        )
+        , concurrency)
       }
 
       setBulkGroups([])
