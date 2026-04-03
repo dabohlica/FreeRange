@@ -227,6 +227,19 @@ async function uploadWithRetry(
   return 'failed'
 }
 
+// ── Adaptive concurrency ──────────────────────────────────────────────────────
+// Returns upload concurrency for a group based on the largest file (D-09).
+//   > 10MB  → 2  (large video/RAW — Vercel memory)
+//   > 2MB   → 4  (normal photos — existing default)
+//   ≤ 2MB   → 6  (small/web-optimised photos — safe to parallelize more)
+function getConcurrency(files: File[]): number {
+  const MB = 1024 * 1024
+  const maxSize = Math.max(...files.map(f => f.size))
+  if (maxSize > 10 * MB) return 2
+  if (maxSize > 2  * MB) return 4
+  return 6
+}
+
 // ── Parallel upload with concurrency cap ─────────────────────────────────────
 async function uploadInParallel(
   files: File[],
@@ -594,6 +607,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         if (!entryRes.ok) continue
         const entry = await entryRes.json()
 
+        const concurrency = getConcurrency(g.files)
         const groupSummary = await uploadInParallel(g.files, entry.id, ({ done, skipped, failed, total }) =>
           setBulkProgressState({
             done,
@@ -602,7 +616,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
             total,
             groupLabel: `Group ${i + 1}/${bulkGroups.length} · ${g.title}`,
           })
-        )
+        , concurrency)
         totalDone    += groupSummary.done
         totalSkipped += groupSummary.skipped
         totalFailed  += groupSummary.failed
