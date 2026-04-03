@@ -22,12 +22,11 @@ interface Entry {
   media: Media[]; trip?: { id: string; name: string; color: string } | null
 }
 
-// A proposed group during bulk upload
 interface BulkGroup {
   key: string
   files: File[]
   previews: string[]
-  date: string          // YYYY-MM-DD
+  date: string
   latitude: string
   longitude: string
   city: string
@@ -37,38 +36,7 @@ interface BulkGroup {
   tripId: string
 }
 
-// Per-file status from /api/upload response
-interface FileUploadStatus {
-  filename: string
-  status: 'done' | 'skipped' | 'failed'
-  error?: string
-}
-
-// Counts passed to onProgress callback during upload
-interface BulkUploadProgress {
-  done: number
-  skipped: number
-  failed: number
-  uploading: number  // files currently in-flight
-  total: number
-}
-
-// Structured progress state for the count summary bar (replaces string bulkProgress)
-interface BulkProgressState {
-  done: number
-  skipped: number
-  failed: number
-  total: number
-  groupLabel: string   // e.g. "Group 2/5 · Tokyo, Japan"
-}
-
-// Return value of uploadInParallel
-interface UploadSummary {
-  done: number
-  skipped: number
-  failed: number
-  failedFiles: string[]  // filenames of permanently-failed files
-}
+type BulkStage = 'idle' | 'analyzing' | 'reviewing' | 'uploading' | 'resetting'
 
 type Tab = 'entries' | 'new-entry' | 'bulk' | 'trips' | 'location'
 
@@ -76,8 +44,6 @@ type Tab = 'entries' | 'new-entry' | 'bulk' | 'trips' | 'location'
 async function extractExifFromFile(file: File): Promise<{ lat?: number; lng?: number; date?: Date }> {
   try {
     const exifr = (await import('exifr')).default
-    // Do NOT use `pick` for GPS fields — omitting GPSLatitudeRef/GPSLongitudeRef
-    // causes exifr to drop the sign, placing Western locations in the Mediterranean.
     const data = await exifr.parse(file, { gps: true, exif: true })
     if (!data) return {}
     return {
@@ -100,7 +66,7 @@ function getCurrentLocation(): Promise<{ lat: number; lng: number }> {
   })
 }
 
-// ── Distance between two lat/lng points in km (Haversine) ───────────────────
+// ── Haversine distance ───────────────────────────────────────────────────────
 function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371
   const dLat = (lat2 - lat1) * Math.PI / 180
@@ -109,266 +75,113 @@ function distanceKm(lat1: number, lng1: number, lat2: number, lng2: number): num
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-// ── Auto-title from date + city/country ─────────────────────────────────────
 function autoTitle(date: string, city?: string, country?: string): string {
-  const d = new Date(date)
-  const dateStr = d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
   if (city && country) return `${city}, ${country}`
   if (city) return city
-  return dateStr
+  const d = new Date(date)
+  return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 }
 
 // ── Group files by day + location proximity ──────────────────────────────────
 async function groupFiles(files: File[]): Promise<BulkGroup[]> {
-  // Extract EXIF for all files in parallel
   const metas = await Promise.all(files.map(async (f) => ({ file: f, exif: await extractExifFromFile(f) })))
-
-  // Sort by date
-  metas.sort((a, b) => {
-    const da = a.exif.date?.getTime() ?? 0
-    const db = b.exif.date?.getTime() ?? 0
-    return da - db
-  })
+  metas.sort((a, b) => (a.exif.date?.getTime() ?? 0) - (b.exif.date?.getTime() ?? 0))
 
   const groups: Array<{ files: File[]; dates: Date[]; lats: number[]; lngs: number[] }> = []
-  const LOCATION_THRESHOLD_KM = 8
+  const THRESHOLD_KM = 8
 
   for (const { file, exif } of metas) {
     const day = exif.date ? exif.date.toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
-
-    // Try to find a matching group: same day + within location threshold
     let matched = false
+
     for (const g of groups) {
       const gDay = g.dates[0]?.toISOString().split('T')[0]
       if (gDay !== day) continue
 
-      // If either has no GPS, group by day only
       if (exif.lat == null || exif.lng == null || g.lats.length === 0) {
         g.files.push(file)
         if (exif.date) g.dates.push(exif.date)
         if (exif.lat != null) g.lats.push(exif.lat)
         if (exif.lng != null) g.lngs.push(exif.lng)
-        matched = true
-        break
+        matched = true; break
       }
 
       const avgLat = g.lats.reduce((a, b) => a + b, 0) / g.lats.length
       const avgLng = g.lngs.reduce((a, b) => a + b, 0) / g.lngs.length
-      if (distanceKm(avgLat, avgLng, exif.lat, exif.lng) <= LOCATION_THRESHOLD_KM) {
+      if (distanceKm(avgLat, avgLng, exif.lat, exif.lng) <= THRESHOLD_KM) {
         g.files.push(file)
         if (exif.date) g.dates.push(exif.date)
-        g.lats.push(exif.lat)
-        g.lngs.push(exif.lng)
-        matched = true
-        break
+        g.lats.push(exif.lat); g.lngs.push(exif.lng)
+        matched = true; break
       }
     }
 
-    if (!matched) {
-      groups.push({
-        files: [file],
-        dates: exif.date ? [exif.date] : [],
-        lats: exif.lat != null ? [exif.lat] : [],
-        lngs: exif.lng != null ? [exif.lng] : [],
-      })
-    }
+    if (!matched) groups.push({
+      files: [file],
+      dates: exif.date ? [exif.date] : [],
+      lats: exif.lat != null ? [exif.lat] : [],
+      lngs: exif.lng != null ? [exif.lng] : [],
+    })
   }
 
   return groups.map((g, i) => {
     const date = g.dates[0]?.toISOString().split('T')[0] ?? new Date().toISOString().split('T')[0]
     const avgLat = g.lats.length ? (g.lats.reduce((a, b) => a + b, 0) / g.lats.length).toFixed(6) : ''
     const avgLng = g.lngs.length ? (g.lngs.reduce((a, b) => a + b, 0) / g.lngs.length).toFixed(6) : ''
-    const previews = g.files.slice(0, 4).map(f => URL.createObjectURL(f))
     return {
       key: `group-${i}-${date}`,
       files: g.files,
-      previews,
-      date,
-      latitude: avgLat,
-      longitude: avgLng,
-      city: '',
-      country: '',
+      previews: g.files.slice(0, 4).map(f => URL.createObjectURL(f)),
+      date, latitude: avgLat, longitude: avgLng,
+      city: '', country: '',
       title: autoTitle(date),
-      description: '',
-      tripId: '',
+      description: '', tripId: '',
     }
   })
 }
 
-// ── Single-file upload with automatic retry ──────────────────────────────────
-// Returns 'done' | 'skipped' | 'failed'. Retries up to maxRetries times
-// with exponential backoff (500ms, 1000ms). Retries are silent.
-async function uploadWithRetry(
+// ── Single file upload with retry ────────────────────────────────────────────
+async function uploadFile(
   file: File,
   entryId: string,
-  maxRetries = 2,
-  signal?: AbortSignal
+  signal: AbortSignal,
 ): Promise<'done' | 'skipped' | 'failed'> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    if (signal?.aborted) return 'failed'
-    if (attempt > 0) {
-      await new Promise(r => setTimeout(r, 500 * attempt))  // 500ms, 1000ms
-    }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (signal.aborted) return 'failed'
+    if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt))
     try {
       const form = new FormData()
       form.append('entryId', entryId)
       form.append('files', file)
       const res = await fetch('/api/upload', { method: 'POST', body: form, signal })
-      if (res.ok) {
-        const body = await res.json() as { results: Array<{ success?: boolean; skipped?: boolean; error?: string }> }
-        const result = body.results?.[0]
-        if (result?.success) return 'done'
-        if (result?.skipped) return 'skipped'  // duplicate — terminal, don't retry
-        // Server returned ok but result indicates error — retry
-      } else if (res.status === 400 || res.status === 403 || res.status === 404) {
-        return 'failed'  // client errors won't improve with retries
+      if (!res.ok) {
+        if (res.status < 500) return 'failed'
+        continue
       }
-      // 5xx / network error — retry
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return 'failed'
-      // Network error — retry
+      const { results } = await res.json()
+      const r = results?.[0]
+      if (r?.success) return 'done'
+      if (r?.skipped) return 'skipped'
+    } catch (e) {
+      if ((e as DOMException).name === 'AbortError') return 'failed'
     }
   }
   return 'failed'
 }
 
-// ── Adaptive concurrency ──────────────────────────────────────────────────────
-// Returns upload concurrency for a group based on the largest file (D-09).
-//   > 10MB  → 2  (large video/RAW — Vercel memory)
-//   > 2MB   → 4  (normal photos — existing default)
-//   ≤ 2MB   → 6  (small/web-optimised photos — safe to parallelize more)
-function getConcurrency(files: File[]): number {
-  const MB = 1024 * 1024
-  const maxSize = Math.max(...files.map(f => f.size))
-  if (maxSize > 10 * MB) return 2
-  if (maxSize > 2  * MB) return 4
-  return 6
-}
-
-// ── Parallel upload with concurrency cap ─────────────────────────────────────
-async function uploadInParallel(
-  files: File[],
-  entryId: string,
-  onProgress: (progress: BulkUploadProgress) => void,
-  concurrency = 4,
-  signal?: AbortSignal
-): Promise<UploadSummary> {
-  let done = 0
-  let skipped = 0
-  let failed = 0
-  const failedFiles: string[] = []
-  const total = files.length
-  let inFlight = 0
-
-  for (let i = 0; i < files.length; i += concurrency) {
-    if (signal?.aborted) break
-    const batch = files.slice(i, i + concurrency)
-    inFlight = batch.length
-    await Promise.all(batch.map(async (file) => {
-      const fileStatus = await uploadWithRetry(file, entryId, 2, signal)
-      if (fileStatus === 'done') done++
-      else if (fileStatus === 'skipped') skipped++
-      else { failed++; failedFiles.push(file.name) }
-      inFlight--
-      onProgress({ done, skipped, failed, uploading: inFlight, total })
-    }))
-  }
-
-  return { done, skipped, failed, failedFiles }
-}
-
-// ── Post-upload Summary Modal ────────────────────────────────────────────────
-function UploadSummaryModal({
-  summary,
-  retrying,
-  onRetry,
-  onDismiss,
-}: {
-  summary: UploadSummary
-  retrying: boolean
-  onRetry: () => void
-  onDismiss: () => void
-}) {
+// ── Bulk dropzone (separate component so key remount resets the file input) ──
+function BulkDropzone({ onDrop }: { onDrop: (files: File[]) => void }) {
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.heic'], 'video/*': ['.mp4', '.mov', '.webm'] },
+    multiple: true,
+  })
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 space-y-4 shadow-xl">
-        <h2 className="text-base font-semibold text-[#171717]">Upload complete</h2>
-
-        {/* Counts */}
-        <div className="flex gap-4 text-sm">
-          <span className="text-[#171717]">✓ {summary.done} uploaded</span>
-          {summary.skipped > 0 && <span className="text-[#737373]">⊘ {summary.skipped} skipped</span>}
-          {summary.failed  > 0 && <span className="text-red-600">✗ {summary.failed} failed</span>}
-        </div>
-
-        {/* Failed file list */}
-        {summary.failedFiles.length > 0 && (
-          <div className="bg-[#f5f5f4] rounded-xl px-4 py-3 max-h-40 overflow-y-auto">
-            <p className="text-xs font-medium text-[#404040] mb-2">Failed files:</p>
-            <ul className="space-y-1">
-              {summary.failedFiles.map(name => (
-                <li key={name} className="text-xs text-red-600 truncate">{name}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* Actions */}
-        <div className="flex gap-2 pt-1">
-          {summary.failed > 0 && (
-            <button
-              onClick={onRetry}
-              disabled={retrying}
-              className="flex-1 py-2.5 px-4 rounded-xl bg-[#171717] text-white font-medium text-sm hover:bg-[#404040] disabled:opacity-50 transition-colors cursor-pointer"
-            >
-              {retrying ? (
-                <span className="flex items-center justify-center gap-2">
-                  <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Retrying…
-                </span>
-              ) : 'Retry failed'}
-            </button>
-          )}
-          <button
-            onClick={onDismiss}
-            className="flex-1 py-2.5 px-4 rounded-xl border border-[#e5e5e5] text-[#737373] hover:text-[#171717] font-medium text-sm transition-colors cursor-pointer"
-          >
-            Dismiss
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Upload Progress Bar ──────────────────────────────────────────────────────
-function UploadProgressBar({ progress }: { progress: BulkProgressState }) {
-  const completed = progress.done + progress.skipped + progress.failed
-  const pct = progress.total > 0 ? Math.min(100, Math.round((completed / progress.total) * 100)) : 0
-
-  return (
-    <div className="bg-[#f5f5f4] rounded-xl px-4 py-2.5 space-y-2">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm flex-wrap">
-          <span className="text-[#171717] font-medium">{progress.done} done</span>
-          {progress.skipped > 0 && (
-            <><span className="text-[#a3a3a3]">·</span><span className="text-[#737373]">{progress.skipped} skipped</span></>
-          )}
-          {progress.failed > 0 && (
-            <><span className="text-[#a3a3a3]">·</span><span className="text-red-600">{progress.failed} failed</span></>
-          )}
-        </div>
-        <span className="text-xs text-[#a3a3a3] shrink-0">{completed}/{progress.total}</span>
-      </div>
-      <div className="bg-[#e5e5e5] rounded-full h-1.5 w-full">
-        <div
-          className="bg-[#171717] rounded-full h-1.5 transition-all duration-300"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      {progress.groupLabel && (
-        <p className="text-xs text-[#a3a3a3] truncate">{progress.groupLabel}</p>
-      )}
+    <div {...getRootProps()} className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all duration-200 ${isDragActive ? 'border-[#171717] bg-[#171717]/5' : 'border-[#e5e5e5] hover:border-[#d4d4d4] hover:bg-[#fafaf9]'}`}>
+      <input {...getInputProps()} />
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#a3a3a3" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mx-auto mb-3"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <p className="text-sm text-[#737373]">{isDragActive ? 'Drop photos here' : 'Drag & drop all your photos, or click to browse'}</p>
+      <p className="text-xs text-[#a3a3a3] mt-1">Groups by day + location (≤ 8 km) · EXIF required for smart grouping</p>
     </div>
   )
 }
@@ -393,23 +206,25 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
   const [editEntry, setEditEntry]         = useState<Entry | null>(null)
 
   // ── Bulk upload state ────────────────────────────────────────────────────
-  const [bulkGroups, setBulkGroups]       = useState<BulkGroup[]>([])
-  const [bulkAnalyzing, setBulkAnalyzing] = useState(false)
-  const [bulkSubmitting, setBulkSubmitting] = useState(false)
-  const [bulkSummary, setBulkSummary]     = useState<UploadSummary | null>(null)
-  const [retrying, setRetrying]           = useState(false)
-  const [retryQueue, setRetryQueue]       = useState<Array<{ file: File; entryId: string }>>([])
-  const [bulkProgressState, setBulkProgressState] = useState<BulkProgressState | null>(null)
-  const bulkAbortRef        = useRef<AbortController | null>(null)
-  const bulkCreatedIdsRef   = useRef<string[]>([])
+  const [bulkStage, setBulkStage]   = useState<BulkStage>('idle')
+  const [bulkGroups, setBulkGroups] = useState<BulkGroup[]>([])
+  const [bulkProgress, setBulkProgress] = useState<{
+    groupIdx: number; groupCount: number
+    fileDone: number; fileTotal: number; label: string
+  } | null>(null)
+  const [bulkDone, setBulkDone]     = useState(0)
+  const [bulkSkipped, setBulkSkipped] = useState(0)
+  const [bulkFailed, setBulkFailed] = useState(0)
+  const [dropzoneKey, setDropzoneKey] = useState(0)  // increment to remount file input
+  const bulkAbortRef      = useRef<AbortController | null>(null)
+  const bulkCreatedIdsRef = useRef<string[]>([])
 
   const [geoLocating, setGeoLocating]     = useState(false)
-  // null = closed, 'entry' = single form, number = bulk group index
   const [pickerTarget, setPickerTarget]   = useState<'entry' | number | null>(null)
 
   // ── Bulk selection + delete ──────────────────────────────────────────────
   const [selectedIds, setSelectedIds]     = useState<Set<string>>(new Set())
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null) // inline confirm for single
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [bulkDeleting, setBulkDeleting]   = useState(false)
 
   const [locationForm, setLocationForm]   = useState({ latitude: '', longitude: '', altitude: '' })
@@ -446,24 +261,35 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
     multiple: true,
   })
 
-  // ── Bulk dropzone ────────────────────────────────────────────────────────
+  // ── Bulk drop ────────────────────────────────────────────────────────────
   const onBulkDrop = useCallback(async (accepted: File[]) => {
     if (!accepted.length) return
-    setBulkAnalyzing(true)
+    setBulkStage('analyzing')
     setBulkGroups([])
     try {
       const groups = await groupFiles(accepted)
       setBulkGroups(groups)
-    } finally {
-      setBulkAnalyzing(false)
+      setBulkStage('reviewing')
+    } catch {
+      setBulkStage('idle')
     }
   }, [])
 
-  const { getRootProps: getBulkRootProps, getInputProps: getBulkInputProps, isDragActive: isBulkDragActive } = useDropzone({
-    onDrop: onBulkDrop,
-    accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.heic'], 'video/*': ['.mp4', '.mov', '.webm'] },
-    multiple: true,
-  })
+  // ── Start Over: abort + await cleanup + remount dropzone ─────────────────
+  async function handleStartOver() {
+    bulkAbortRef.current?.abort()
+    const ids = bulkCreatedIdsRef.current.splice(0)
+    setBulkStage('resetting')
+    setBulkGroups([])
+    setBulkProgress(null)
+    setBulkDone(0); setBulkSkipped(0); setBulkFailed(0)
+    // Await cleanup so hashes are gone before the user can re-upload
+    if (ids.length > 0) {
+      await Promise.allSettled(ids.map(id => fetch(`/api/entries/${id}`, { method: 'DELETE' })))
+    }
+    setDropzoneKey(k => k + 1)  // remount file input so same files can be selected again
+    setBulkStage('idle')
+  }
 
   // ── Create / update single entry ─────────────────────────────────────────
   async function handleSubmitEntry(e: React.FormEvent) {
@@ -497,9 +323,11 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         entry = await res.json()
       }
 
-      await uploadInParallel(uploadFiles, entry.id, ({ done, total }) =>
-        setUploadProgress(`Uploading ${done}/${total} files…`)
-      )
+      const abort = new AbortController()
+      for (let i = 0; i < uploadFiles.length; i++) {
+        setUploadProgress(`Uploading ${i + 1}/${uploadFiles.length}…`)
+        await uploadFile(uploadFiles[i], entry.id, abort.signal)
+      }
 
       setEntryForm(blankForm())
       setUploadFiles([])
@@ -513,7 +341,6 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
     } finally { setSubmitting(false); setUploadProgress(null) }
   }
 
-  // ── Edit: open form pre-filled ────────────────────────────────────────────
   function handleEditEntry(entry: Entry) {
     setEditEntry(entry)
     setEntryForm({
@@ -561,19 +388,11 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
   }
 
   function toggleSelect(id: string) {
-    setSelectedIds(prev => {
-      const n = new Set(prev)
-      n.has(id) ? n.delete(id) : n.add(id)
-      return n
-    })
+    setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   }
 
   function toggleSelectAll() {
-    if (selectedIds.size === entries.length) {
-      setSelectedIds(new Set())
-    } else {
-      setSelectedIds(new Set(entries.map(e => e.id)))
-    }
+    setSelectedIds(selectedIds.size === entries.length ? new Set() : new Set(entries.map(e => e.id)))
   }
 
   async function handleDeleteMedia(mediaId: string, entryId: string) {
@@ -583,38 +402,34 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
 
   // ── Bulk create ───────────────────────────────────────────────────────────
   async function handleBulkCreate() {
-    if (!bulkGroups.length) return
+    if (!bulkGroups.length || bulkStage === 'uploading') return
     const abort = new AbortController()
     bulkAbortRef.current = abort
     bulkCreatedIdsRef.current = []
-    setBulkSubmitting(true)
+    setBulkStage('uploading')
+    setBulkDone(0); setBulkSkipped(0); setBulkFailed(0)
+
     let totalDone = 0, totalSkipped = 0, totalFailed = 0
-    const allFailedFiles: string[] = []
-    const allRetryQueue: Array<{ file: File; entryId: string }> = []
+
     try {
-      for (let i = 0; i < bulkGroups.length; i++) {
+      for (let gi = 0; gi < bulkGroups.length; gi++) {
         if (abort.signal.aborted) break
-        const g = bulkGroups[i]
-        setBulkProgressState({
-          done: totalDone,
-          skipped: totalSkipped,
-          failed: totalFailed,
-          total: g.files.length,
-          groupLabel: `Group ${i + 1}/${bulkGroups.length} · ${g.title}`,
-        })
+        const g = bulkGroups[gi]
+
+        setBulkProgress({ groupIdx: gi + 1, groupCount: bulkGroups.length, fileDone: 0, fileTotal: g.files.length, label: g.title })
 
         const entryRes = await fetch('/api/entries', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            title:       g.title || undefined,
+            title:       g.title       || undefined,
             description: g.description || null,
             date:        g.date,
-            latitude:    g.latitude  || null,
-            longitude:   g.longitude || null,
-            city:        g.city    || null,
-            country:     g.country || null,
-            tripId:      g.tripId  || null,
+            latitude:    g.latitude    || null,
+            longitude:   g.longitude   || null,
+            city:        g.city        || null,
+            country:     g.country     || null,
+            tripId:      g.tripId      || null,
           }),
           signal: abort.signal,
         })
@@ -622,46 +437,41 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         const entry = await entryRes.json()
         bulkCreatedIdsRef.current.push(entry.id)
 
-        const concurrency = getConcurrency(g.files)
-        const groupSummary = await uploadInParallel(g.files, entry.id, ({ done, skipped, failed, total }) =>
-          setBulkProgressState({
-            done,
-            skipped,
-            failed,
-            total,
-            groupLabel: `Group ${i + 1}/${bulkGroups.length} · ${g.title}`,
-          })
-        , concurrency, abort.signal)
-        totalDone    += groupSummary.done
-        totalSkipped += groupSummary.skipped
-        totalFailed  += groupSummary.failed
-        allFailedFiles.push(...groupSummary.failedFiles)
-        // Build retryQueue: map failed filenames back to File objects with their entryId
-        for (const name of groupSummary.failedFiles) {
-          const file = g.files.find(f => f.name === name)
-          if (file) allRetryQueue.push({ file, entryId: entry.id })
+        // Upload files 3 at a time
+        const CONCURRENCY = 3
+        let fileDone = 0
+        for (let fi = 0; fi < g.files.length; fi += CONCURRENCY) {
+          if (abort.signal.aborted) break
+          const batch = g.files.slice(fi, fi + CONCURRENCY)
+          await Promise.all(batch.map(async (file) => {
+            const result = await uploadFile(file, entry.id, abort.signal)
+            if (result === 'done')    { totalDone++;    setBulkDone(d => d + 1) }
+            if (result === 'skipped') { totalSkipped++; setBulkSkipped(s => s + 1) }
+            if (result === 'failed')  { totalFailed++;  setBulkFailed(f => f + 1) }
+            fileDone++
+            setBulkProgress({ groupIdx: gi + 1, groupCount: bulkGroups.length, fileDone, fileTotal: g.files.length, label: g.title })
+          }))
         }
       }
+    } catch (e) {
+      if ((e as DOMException).name !== 'AbortError') console.error('Bulk create error:', e)
+    }
 
-      if (abort.signal.aborted) return
+    if (abort.signal.aborted) return
 
-      // Show summary modal if there were any failures or skips (D-03, D-04)
-      if (totalFailed > 0 || totalSkipped > 0) {
-        setRetryQueue(allRetryQueue)
-        setBulkSummary({ done: totalDone, skipped: totalSkipped, failed: totalFailed, failedFiles: allFailedFiles })
-      } else {
-        // Everything succeeded cleanly — no modal, navigate immediately (D-04)
-        setBulkGroups([])
-        setBulkProgressState(null)
-        setTab('entries')
-        router.refresh()
-        const freshRes = await fetch('/api/entries')
-        if (freshRes.ok) setEntries(await freshRes.json())
-      }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return
-      console.error('Bulk create error:', err)
-    } finally { setBulkSubmitting(false); setBulkProgressState(null) }
+    setBulkProgress(null)
+    setBulkStage('reviewing')
+
+    // Navigate away only if everything succeeded
+    if (totalFailed === 0 && totalSkipped === 0) {
+      setBulkGroups([])
+      setBulkStage('idle')
+      setDropzoneKey(k => k + 1)
+      setTab('entries')
+      router.refresh()
+      const freshRes = await fetch('/api/entries')
+      if (freshRes.ok) setEntries(await freshRes.json())
+    }
   }
 
   async function handleCreateTrip(e: React.FormEvent) {
@@ -714,7 +524,6 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
           <div className="space-y-3">
             {entries.length === 0 && <div className="text-center py-16 text-[#a3a3a3]">No entries yet. Create your first entry!</div>}
 
-            {/* Bulk action bar */}
             {entries.length > 0 && (
               <div className="flex items-center justify-between gap-3 pb-1">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -755,7 +564,6 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
             {entries.map(entry => (
               <div key={entry.id} className={`bg-white rounded-2xl border p-5 transition-colors ${selectedIds.has(entry.id) ? 'border-[#171717]' : 'border-[#e5e5e5] hover:border-[#d4d4d4]'}`}>
                 <div className="flex items-start gap-3">
-                  {/* Checkbox */}
                   <input
                     type="checkbox"
                     checked={selectedIds.has(entry.id)}
@@ -815,7 +623,6 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
             <form onSubmit={handleSubmitEntry} className="space-y-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
-                {/* Upload zone */}
                 <div className="sm:col-span-2">
                   <label className="block text-sm font-medium text-[#404040] mb-1.5">
                     {editEntry ? 'Add More Photos & Videos' : 'Photos & Videos'}
@@ -844,7 +651,6 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                   )}
                 </div>
 
-                {/* Title */}
                 <div className="sm:col-span-2">
                   <label className="block text-sm font-medium text-[#404040] mb-1.5">
                     Title <span className="ml-2 font-normal text-[#a3a3a3]">— auto-generated from date/location if blank</span>
@@ -918,31 +724,34 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         {/* ── Bulk Upload ── */}
         {tab === 'bulk' && (
           <div className="space-y-6">
-            {/* Drop zone */}
-            {bulkGroups.length === 0 && (
-              <div className="bg-white rounded-2xl border border-[#e5e5e5] p-6">
-                <h2 className="text-lg font-semibold text-[#171717] mb-2">Bulk Upload</h2>
-                <p className="text-sm text-[#737373] mb-5">Drop all your photos at once. They&apos;ll be grouped by day and location area automatically.</p>
-                <div {...getBulkRootProps()} className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all duration-200 ${isBulkDragActive ? 'border-[#171717] bg-[#171717]/5' : 'border-[#e5e5e5] hover:border-[#d4d4d4] hover:bg-[#fafaf9]'}`}>
-                  <input {...getBulkInputProps()} />
-                  {bulkAnalyzing ? (
-                    <div>
-                      <div className="w-8 h-8 border-2 border-[#171717] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-                      <p className="text-sm text-[#737373]">Analysing EXIF data and grouping…</p>
-                    </div>
-                  ) : (
-                    <div>
-                      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#a3a3a3" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mx-auto mb-3"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                      <p className="text-sm text-[#737373]">{isBulkDragActive ? 'Drop photos here' : 'Drag & drop all your photos, or click to browse'}</p>
-                      <p className="text-xs text-[#a3a3a3] mt-1">Groups by day + location (≤ 8 km) · EXIF required for smart grouping</p>
-                    </div>
-                  )}
-                </div>
+
+            {/* Resetting */}
+            {bulkStage === 'resetting' && (
+              <div className="bg-white rounded-2xl border border-[#e5e5e5] p-12 text-center">
+                <div className="w-8 h-8 border-2 border-[#171717] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                <p className="text-sm text-[#737373]">Cleaning up…</p>
               </div>
             )}
 
-            {/* Groups review */}
-            {bulkGroups.length > 0 && (
+            {/* Drop zone */}
+            {bulkStage === 'idle' && (
+              <div className="bg-white rounded-2xl border border-[#e5e5e5] p-6">
+                <h2 className="text-lg font-semibold text-[#171717] mb-2">Bulk Upload</h2>
+                <p className="text-sm text-[#737373] mb-5">Drop all your photos at once. They&apos;ll be grouped by day and location area automatically.</p>
+                <BulkDropzone key={dropzoneKey} onDrop={onBulkDrop} />
+              </div>
+            )}
+
+            {/* Analyzing */}
+            {bulkStage === 'analyzing' && (
+              <div className="bg-white rounded-2xl border border-[#e5e5e5] p-12 text-center">
+                <div className="w-8 h-8 border-2 border-[#171717] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                <p className="text-sm text-[#737373]">Analysing EXIF data and grouping…</p>
+              </div>
+            )}
+
+            {/* Review + upload */}
+            {(bulkStage === 'reviewing' || bulkStage === 'uploading') && bulkGroups.length > 0 && (
               <>
                 <div className="flex items-center justify-between">
                   <div>
@@ -950,26 +759,60 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                     <p className="text-xs text-[#a3a3a3] mt-0.5">{bulkGroups.reduce((s, g) => s + g.files.length, 0)} photos total · Review and edit before creating</p>
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={() => {
-                      bulkAbortRef.current?.abort()
-                      const toDelete = bulkCreatedIdsRef.current.slice()
-                      bulkCreatedIdsRef.current = []
-                      toDelete.forEach(id => fetch(`/api/entries/${id}`, { method: 'DELETE' }).catch(() => {}))
-                      setBulkGroups([]); setBulkSubmitting(false); setBulkProgressState(null); setBulkSummary(null); setRetryQueue([])
-                    }} className="px-4 py-2 rounded-xl border border-[#e5e5e5] text-sm text-[#737373] hover:text-[#171717] hover:border-[#d4d4d4] transition-colors cursor-pointer">Start over</button>
-                    <button onClick={handleBulkCreate} disabled={bulkSubmitting} className="px-4 py-2 rounded-xl bg-[#171717] text-white text-sm font-medium hover:bg-[#404040] disabled:opacity-50 transition-colors cursor-pointer">
-                      {bulkSubmitting ? 'Creating…' : `Create ${bulkGroups.length} entr${bulkGroups.length !== 1 ? 'ies' : 'y'}`}
+                    <button
+                      onClick={handleStartOver}
+                      disabled={bulkStage === 'uploading'}
+                      className="px-4 py-2 rounded-xl border border-[#e5e5e5] text-sm text-[#737373] hover:text-[#171717] hover:border-[#d4d4d4] disabled:opacity-40 transition-colors cursor-pointer">
+                      Start over
+                    </button>
+                    <button
+                      onClick={handleBulkCreate}
+                      disabled={bulkStage === 'uploading'}
+                      className="px-4 py-2 rounded-xl bg-[#171717] text-white text-sm font-medium hover:bg-[#404040] disabled:opacity-50 transition-colors cursor-pointer">
+                      {bulkStage === 'uploading' ? 'Uploading…' : `Create ${bulkGroups.length} entr${bulkGroups.length !== 1 ? 'ies' : 'y'}`}
                     </button>
                   </div>
                 </div>
 
-                {bulkProgressState && <UploadProgressBar progress={bulkProgressState} />}
+                {/* Progress */}
+                {bulkStage === 'uploading' && bulkProgress && (
+                  <div className="bg-[#f5f5f4] rounded-xl px-4 py-3 space-y-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-[#171717] font-medium truncate">{bulkProgress.label}</span>
+                      <span className="text-xs text-[#a3a3a3] shrink-0 ml-3">Group {bulkProgress.groupIdx}/{bulkProgress.groupCount}</span>
+                    </div>
+                    <div className="bg-[#e5e5e5] rounded-full h-1.5">
+                      <div className="bg-[#171717] rounded-full h-1.5 transition-all duration-300"
+                        style={{ width: `${bulkProgress.fileTotal > 0 ? Math.round((bulkProgress.fileDone / bulkProgress.fileTotal) * 100) : 0}%` }} />
+                    </div>
+                    <div className="flex gap-3 text-xs text-[#737373]">
+                      <span>{bulkDone} uploaded</span>
+                      {bulkSkipped > 0 && <span>{bulkSkipped} skipped</span>}
+                      {bulkFailed  > 0 && <span className="text-red-500">{bulkFailed} failed</span>}
+                    </div>
+                  </div>
+                )}
 
-                {/* Banner: stamp all GPS-less groups with current location */}
-                {bulkGroups.some(g => !g.latitude) && (
+                {/* Results after upload */}
+                {bulkStage === 'reviewing' && (bulkDone > 0 || bulkSkipped > 0 || bulkFailed > 0) && (
+                  <div className="bg-[#f0fdf4] border border-[#86efac] rounded-xl px-4 py-3 flex items-center justify-between gap-4">
+                    <div className="flex gap-4 text-sm">
+                      <span className="text-[#166534]">{bulkDone} uploaded</span>
+                      {bulkSkipped > 0 && <span className="text-[#737373]">{bulkSkipped} skipped (duplicates)</span>}
+                      {bulkFailed  > 0 && <span className="text-red-600">{bulkFailed} failed — try again</span>}
+                    </div>
+                    <button onClick={() => { setTab('entries'); router.refresh(); fetch('/api/entries').then(r => r.ok ? r.json() : null).then(d => d && setEntries(d)) }}
+                      className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-[#171717] text-white hover:bg-[#404040] transition-colors cursor-pointer">
+                      Go to entries
+                    </button>
+                  </div>
+                )}
+
+                {/* GPS-less banner */}
+                {bulkStage === 'reviewing' && bulkGroups.some(g => !g.latitude) && (
                   <div className="flex items-center justify-between gap-4 bg-[#eff6ff] border border-[#bfdbfe] rounded-xl px-4 py-3">
                     <p className="text-sm text-[#1d4ed8]">
-                      {bulkGroups.filter(g => !g.latitude).length} group{bulkGroups.filter(g => !g.latitude).length !== 1 ? 's' : ''} have no GPS (phone upload strips EXIF).
+                      {bulkGroups.filter(g => !g.latitude).length} group{bulkGroups.filter(g => !g.latitude).length !== 1 ? 's' : ''} have no GPS.
                     </p>
                     <button type="button" disabled={geoLocating} onClick={async () => {
                       setGeoLocating(true)
@@ -988,7 +831,6 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                 <div className="space-y-4">
                   {bulkGroups.map((group, gi) => (
                     <div key={group.key} className="bg-white rounded-2xl border border-[#e5e5e5] p-5">
-                      {/* Preview thumbnails */}
                       <div className="flex gap-1.5 mb-4">
                         {group.previews.map((src, pi) => (
                           <div key={pi} className="relative w-14 h-14 shrink-0 rounded-lg overflow-hidden bg-[#f5f5f4]">
@@ -1010,68 +852,74 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                         <div className="sm:col-span-2">
                           <label className="block text-xs font-medium text-[#404040] mb-1">Title</label>
                           <input type="text" value={group.title} onChange={e => setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, title: e.target.value } : g))}
-                            className={inputCls} placeholder="Auto-generated" />
+                            className={inputCls} placeholder="Auto-generated" disabled={bulkStage === 'uploading'} />
                         </div>
                         <div className="sm:col-span-2">
                           <label className="block text-xs font-medium text-[#404040] mb-1">Description</label>
                           <textarea value={group.description} onChange={e => setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, description: e.target.value } : g))}
-                            placeholder="Optional notes…" rows={2} className={`${inputCls} resize-none`} />
+                            placeholder="Optional notes…" rows={2} className={`${inputCls} resize-none`} disabled={bulkStage === 'uploading'} />
                         </div>
                         <div>
                           <label className="block text-xs font-medium text-[#404040] mb-1">City</label>
                           <input type="text" value={group.city} onChange={e => setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, city: e.target.value, title: autoTitle(g.date, e.target.value, g.country) } : g))}
-                            placeholder="Paris" className={inputCls} />
+                            placeholder="Paris" className={inputCls} disabled={bulkStage === 'uploading'} />
                         </div>
                         <div>
                           <label className="block text-xs font-medium text-[#404040] mb-1">Country</label>
                           <input type="text" value={group.country} onChange={e => setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, country: e.target.value, title: autoTitle(g.date, g.city, e.target.value) } : g))}
-                            placeholder="France" className={inputCls} />
+                            placeholder="France" className={inputCls} disabled={bulkStage === 'uploading'} />
                         </div>
                         <div>
                           <label className="block text-xs font-medium text-[#404040] mb-1">Trip</label>
-                          <select value={group.tripId} onChange={e => setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, tripId: e.target.value } : g))} className={inputCls}>
+                          <select value={group.tripId} onChange={e => setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, tripId: e.target.value } : g))} className={inputCls} disabled={bulkStage === 'uploading'}>
                             <option value="">No trip</option>
                             {trips.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                           </select>
                         </div>
                         <div>
                           <label className="block text-xs font-medium text-[#404040] mb-1">Date</label>
-                          <input type="date" value={group.date} onChange={e => setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, date: e.target.value } : g))} className={inputCls} />
+                          <input type="date" value={group.date} onChange={e => setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, date: e.target.value } : g))} className={inputCls} disabled={bulkStage === 'uploading'} />
                         </div>
                         <div className="sm:col-span-2 flex items-center gap-3">
                           {group.latitude
                             ? <p className="text-xs text-[#a3a3a3]">GPS: {group.latitude}, {group.longitude}</p>
                             : <p className="text-xs text-[#f59e0b]">No GPS in EXIF</p>
                           }
-                          <button type="button" disabled={geoLocating} onClick={async () => {
-                            setGeoLocating(true)
-                            try {
-                              const { lat, lng } = await getCurrentLocation()
-                              setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, latitude: lat.toFixed(6), longitude: lng.toFixed(6) } : g))
-                            } catch { alert('Could not get location.') }
-                            finally { setGeoLocating(false) }
-                          }} className="text-xs text-[#3b82f6] hover:text-[#2563eb] disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap">
-                            {geoLocating ? 'Getting…' : 'Use current location'}
-                          </button>
-                          <button type="button" onClick={() => setPickerTarget(gi)} className="text-xs text-[#737373] hover:text-[#171717] transition-colors cursor-pointer whitespace-nowrap">
-                            Pick on map
-                          </button>
+                          {bulkStage !== 'uploading' && <>
+                            <button type="button" disabled={geoLocating} onClick={async () => {
+                              setGeoLocating(true)
+                              try {
+                                const { lat, lng } = await getCurrentLocation()
+                                setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, latitude: lat.toFixed(6), longitude: lng.toFixed(6) } : g))
+                              } catch { alert('Could not get location.') }
+                              finally { setGeoLocating(false) }
+                            }} className="text-xs text-[#3b82f6] hover:text-[#2563eb] disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap">
+                              {geoLocating ? 'Getting…' : 'Use current location'}
+                            </button>
+                            <button type="button" onClick={() => setPickerTarget(gi)} className="text-xs text-[#737373] hover:text-[#171717] transition-colors cursor-pointer whitespace-nowrap">
+                              Pick on map
+                            </button>
+                          </>}
                         </div>
                       </div>
 
-                      <button onClick={() => setBulkGroups(prev => prev.filter((_, i) => i !== gi))}
-                        className="mt-3 text-xs text-[#ef4444]/60 hover:text-[#ef4444] transition-colors cursor-pointer">
-                        Remove this group
-                      </button>
+                      {bulkStage !== 'uploading' && (
+                        <button onClick={() => setBulkGroups(prev => prev.filter((_, i) => i !== gi))}
+                          className="mt-3 text-xs text-[#ef4444]/60 hover:text-[#ef4444] transition-colors cursor-pointer">
+                          Remove this group
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
 
-                <div className="flex justify-end">
-                  <button onClick={handleBulkCreate} disabled={bulkSubmitting} className="px-6 py-2.5 rounded-xl bg-[#171717] text-white text-sm font-medium hover:bg-[#404040] disabled:opacity-50 transition-colors cursor-pointer">
-                    {bulkSubmitting ? 'Creating…' : `Create ${bulkGroups.length} entr${bulkGroups.length !== 1 ? 'ies' : 'y'}`}
-                  </button>
-                </div>
+                {bulkStage === 'reviewing' && (
+                  <div className="flex justify-end">
+                    <button onClick={handleBulkCreate} className="px-6 py-2.5 rounded-xl bg-[#171717] text-white text-sm font-medium hover:bg-[#404040] transition-colors cursor-pointer">
+                      Create {bulkGroups.length} entr{bulkGroups.length !== 1 ? 'ies' : 'y'}
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -1140,78 +988,6 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
               setBulkGroups(prev => prev.map((g, i) => i === pickerTarget ? { ...g, latitude: lat.toFixed(6), longitude: lng.toFixed(6) } : g))
             }
             setPickerTarget(null)
-          }}
-        />
-      )}
-
-      {/* ── Upload Summary Modal ── */}
-      {bulkSummary && (
-        <UploadSummaryModal
-          summary={bulkSummary}
-          retrying={retrying}
-          onRetry={async () => {
-            if (!retryQueue.length) return
-            setRetrying(true)
-
-            // Group retryQueue by entryId so each entry's files upload together
-            const byEntry = retryQueue.reduce<Record<string, { files: File[]; entryId: string }>>((acc, { file, entryId }) => {
-              if (!acc[entryId]) acc[entryId] = { files: [], entryId }
-              acc[entryId].files.push(file)
-              return acc
-            }, {})
-
-            let retryDone = 0, retrySkipped = 0, retryFailed = 0
-            const retryFailedFiles: string[] = []
-            const newQueue: Array<{ file: File; entryId: string }> = []
-
-            for (const { files, entryId } of Object.values(byEntry)) {
-              // Real onProgress callback so counts update in place during retry (D-06)
-              const s = await uploadInParallel(files, entryId, ({ done, skipped, failed }) => {
-                setBulkSummary(prev => prev ? {
-                  ...prev,
-                  done:    (prev.done - retryFailed) + retryDone + done,
-                  skipped: prev.skipped + skipped,
-                  failed:  failed,
-                } : null)
-              })
-              retryDone    += s.done
-              retrySkipped += s.skipped
-              retryFailed  += s.failed
-              retryFailedFiles.push(...s.failedFiles)
-              for (const name of s.failedFiles) {
-                const file = files.find(f => f.name === name)
-                if (file) newQueue.push({ file, entryId })
-              }
-            }
-
-            setRetryQueue(newQueue)
-            // Set final counts after all retry groups complete
-            setBulkSummary(prev => prev ? {
-              done:        prev.done + retryDone,
-              skipped:     prev.skipped + retrySkipped,
-              failed:      retryFailed,
-              failedFiles: retryFailedFiles,
-            } : null)
-            setRetrying(false)
-
-            // Auto-close if all retries resolved (D-06)
-            if (retryFailed === 0) {
-              setBulkSummary(null)
-              setBulkGroups([])
-              setRetryQueue([])
-              setTab('entries')
-              router.refresh()
-              fetch('/api/entries').then(r => r.ok ? r.json() : null).then(d => d && setEntries(d))
-            }
-          }}
-          onDismiss={() => {
-            setBulkSummary(null)
-            setRetryQueue([])
-            setBulkGroups([])
-            setBulkProgressState(null)
-            setTab('entries')
-            router.refresh()
-            fetch('/api/entries').then(r => r.ok ? r.json() : null).then(d => d && setEntries(d))
           }}
         />
       )}
