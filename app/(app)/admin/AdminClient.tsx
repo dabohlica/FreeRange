@@ -932,7 +932,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                     <p className="text-xs text-[#a3a3a3] mt-0.5">{bulkGroups.reduce((s, g) => s + g.files.length, 0)} photos total · Review and edit before creating</p>
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={() => setBulkGroups([])} className="px-4 py-2 rounded-xl border border-[#e5e5e5] text-sm text-[#737373] hover:text-[#171717] hover:border-[#d4d4d4] transition-colors cursor-pointer">Start over</button>
+                    <button onClick={() => { setBulkGroups([]); setBulkSubmitting(false); setBulkProgressState(null); setBulkSummary(null); setRetryQueue([]) }} className="px-4 py-2 rounded-xl border border-[#e5e5e5] text-sm text-[#737373] hover:text-[#171717] hover:border-[#d4d4d4] transition-colors cursor-pointer">Start over</button>
                     <button onClick={handleBulkCreate} disabled={bulkSubmitting} className="px-4 py-2 rounded-xl bg-[#171717] text-white text-sm font-medium hover:bg-[#404040] disabled:opacity-50 transition-colors cursor-pointer">
                       {bulkSubmitting ? 'Creating…' : `Create ${bulkGroups.length} entr${bulkGroups.length !== 1 ? 'ies' : 'y'}`}
                     </button>

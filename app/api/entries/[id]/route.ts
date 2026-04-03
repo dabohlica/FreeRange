@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getSession } from '@/lib/auth'
+import { deleteUploadedFile } from '@/lib/upload'
 
 export async function GET(
   _req: NextRequest,
@@ -64,6 +65,8 @@ export async function DELETE(
 
   const { id } = await params
   try {
+    const mediaItems = await prisma.media.findMany({ where: { entryId: id } })
+    await Promise.all(mediaItems.map((m) => deleteUploadedFile(m.url, m.filename)))
     await prisma.entry.delete({ where: { id } })
   } catch (err) {
     console.error('Entry delete failed:', err)
