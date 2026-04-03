@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
@@ -201,9 +201,11 @@ async function groupFiles(files: File[]): Promise<BulkGroup[]> {
 async function uploadWithRetry(
   file: File,
   entryId: string,
-  maxRetries = 2
+  maxRetries = 2,
+  signal?: AbortSignal
 ): Promise<'done' | 'skipped' | 'failed'> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (signal?.aborted) return 'failed'
     if (attempt > 0) {
       await new Promise(r => setTimeout(r, 500 * attempt))  // 500ms, 1000ms
     }
@@ -211,7 +213,7 @@ async function uploadWithRetry(
       const form = new FormData()
       form.append('entryId', entryId)
       form.append('files', file)
-      const res = await fetch('/api/upload', { method: 'POST', body: form })
+      const res = await fetch('/api/upload', { method: 'POST', body: form, signal })
       if (res.ok) {
         const body = await res.json() as { results: Array<{ success?: boolean; skipped?: boolean; error?: string }> }
         const result = body.results?.[0]
@@ -222,7 +224,8 @@ async function uploadWithRetry(
         return 'failed'  // client errors won't improve with retries
       }
       // 5xx / network error — retry
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return 'failed'
       // Network error — retry
     }
   }
@@ -247,7 +250,8 @@ async function uploadInParallel(
   files: File[],
   entryId: string,
   onProgress: (progress: BulkUploadProgress) => void,
-  concurrency = 4
+  concurrency = 4,
+  signal?: AbortSignal
 ): Promise<UploadSummary> {
   let done = 0
   let skipped = 0
@@ -257,10 +261,11 @@ async function uploadInParallel(
   let inFlight = 0
 
   for (let i = 0; i < files.length; i += concurrency) {
+    if (signal?.aborted) break
     const batch = files.slice(i, i + concurrency)
     inFlight = batch.length
     await Promise.all(batch.map(async (file) => {
-      const fileStatus = await uploadWithRetry(file, entryId)
+      const fileStatus = await uploadWithRetry(file, entryId, 2, signal)
       if (fileStatus === 'done') done++
       else if (fileStatus === 'skipped') skipped++
       else { failed++; failedFiles.push(file.name) }
@@ -395,6 +400,8 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
   const [retrying, setRetrying]           = useState(false)
   const [retryQueue, setRetryQueue]       = useState<Array<{ file: File; entryId: string }>>([])
   const [bulkProgressState, setBulkProgressState] = useState<BulkProgressState | null>(null)
+  const bulkAbortRef        = useRef<AbortController | null>(null)
+  const bulkCreatedIdsRef   = useRef<string[]>([])
 
   const [geoLocating, setGeoLocating]     = useState(false)
   // null = closed, 'entry' = single form, number = bulk group index
@@ -577,12 +584,16 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
   // ── Bulk create ───────────────────────────────────────────────────────────
   async function handleBulkCreate() {
     if (!bulkGroups.length) return
+    const abort = new AbortController()
+    bulkAbortRef.current = abort
+    bulkCreatedIdsRef.current = []
     setBulkSubmitting(true)
     let totalDone = 0, totalSkipped = 0, totalFailed = 0
     const allFailedFiles: string[] = []
     const allRetryQueue: Array<{ file: File; entryId: string }> = []
     try {
       for (let i = 0; i < bulkGroups.length; i++) {
+        if (abort.signal.aborted) break
         const g = bulkGroups[i]
         setBulkProgressState({
           done: totalDone,
@@ -605,9 +616,11 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
             country:     g.country || null,
             tripId:      g.tripId  || null,
           }),
+          signal: abort.signal,
         })
         if (!entryRes.ok) continue
         const entry = await entryRes.json()
+        bulkCreatedIdsRef.current.push(entry.id)
 
         const concurrency = getConcurrency(g.files)
         const groupSummary = await uploadInParallel(g.files, entry.id, ({ done, skipped, failed, total }) =>
@@ -618,7 +631,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
             total,
             groupLabel: `Group ${i + 1}/${bulkGroups.length} · ${g.title}`,
           })
-        , concurrency)
+        , concurrency, abort.signal)
         totalDone    += groupSummary.done
         totalSkipped += groupSummary.skipped
         totalFailed  += groupSummary.failed
@@ -629,6 +642,8 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
           if (file) allRetryQueue.push({ file, entryId: entry.id })
         }
       }
+
+      if (abort.signal.aborted) return
 
       // Show summary modal if there were any failures or skips (D-03, D-04)
       if (totalFailed > 0 || totalSkipped > 0) {
@@ -643,6 +658,9 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         const freshRes = await fetch('/api/entries')
         if (freshRes.ok) setEntries(await freshRes.json())
       }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      console.error('Bulk create error:', err)
     } finally { setBulkSubmitting(false); setBulkProgressState(null) }
   }
 
@@ -932,7 +950,13 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                     <p className="text-xs text-[#a3a3a3] mt-0.5">{bulkGroups.reduce((s, g) => s + g.files.length, 0)} photos total · Review and edit before creating</p>
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={() => { setBulkGroups([]); setBulkSubmitting(false); setBulkProgressState(null); setBulkSummary(null); setRetryQueue([]) }} className="px-4 py-2 rounded-xl border border-[#e5e5e5] text-sm text-[#737373] hover:text-[#171717] hover:border-[#d4d4d4] transition-colors cursor-pointer">Start over</button>
+                    <button onClick={() => {
+                      bulkAbortRef.current?.abort()
+                      const toDelete = bulkCreatedIdsRef.current.slice()
+                      bulkCreatedIdsRef.current = []
+                      toDelete.forEach(id => fetch(`/api/entries/${id}`, { method: 'DELETE' }).catch(() => {}))
+                      setBulkGroups([]); setBulkSubmitting(false); setBulkProgressState(null); setBulkSummary(null); setRetryQueue([])
+                    }} className="px-4 py-2 rounded-xl border border-[#e5e5e5] text-sm text-[#737373] hover:text-[#171717] hover:border-[#d4d4d4] transition-colors cursor-pointer">Start over</button>
                     <button onClick={handleBulkCreate} disabled={bulkSubmitting} className="px-4 py-2 rounded-xl bg-[#171717] text-white text-sm font-medium hover:bg-[#404040] disabled:opacity-50 transition-colors cursor-pointer">
                       {bulkSubmitting ? 'Creating…' : `Create ${bulkGroups.length} entr${bulkGroups.length !== 1 ? 'ies' : 'y'}`}
                     </button>
