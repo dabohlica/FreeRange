@@ -216,10 +216,12 @@ async function uploadWithRetry(
         const body = await res.json() as { results: Array<{ success?: boolean; skipped?: boolean; error?: string }> }
         const result = body.results?.[0]
         if (result?.success) return 'done'
-        if (result?.skipped) return 'skipped'
+        if (result?.skipped) return 'skipped'  // duplicate — terminal, don't retry
         // Server returned ok but result indicates error — retry
+      } else if (res.status === 400 || res.status === 403 || res.status === 404) {
+        return 'failed'  // client errors won't improve with retries
       }
-      // Non-ok HTTP status — retry
+      // 5xx / network error — retry
     } catch {
       // Network error — retry
     }
@@ -337,7 +339,7 @@ function UploadSummaryModal({
 // ── Upload Progress Bar ──────────────────────────────────────────────────────
 function UploadProgressBar({ progress }: { progress: BulkProgressState }) {
   const completed = progress.done + progress.skipped + progress.failed
-  const pct = progress.total > 0 ? Math.round((completed / progress.total) * 100) : 0
+  const pct = progress.total > 0 ? Math.min(100, Math.round((completed / progress.total) * 100)) : 0
 
   return (
     <div className="bg-[#f5f5f4] rounded-xl px-4 py-2.5 space-y-2">
