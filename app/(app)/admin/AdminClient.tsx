@@ -53,6 +53,15 @@ interface BulkUploadProgress {
   total: number
 }
 
+// Structured progress state for the count summary bar (replaces string bulkProgress)
+interface BulkProgressState {
+  done: number
+  skipped: number
+  failed: number
+  total: number
+  groupLabel: string   // e.g. "Group 2/5 · Tokyo, Japan"
+}
+
 // Return value of uploadInParallel
 interface UploadSummary {
   done: number
@@ -312,6 +321,38 @@ function UploadSummaryModal({
   )
 }
 
+// ── Upload Progress Bar ──────────────────────────────────────────────────────
+function UploadProgressBar({ progress }: { progress: BulkProgressState }) {
+  const completed = progress.done + progress.skipped + progress.failed
+  const pct = progress.total > 0 ? Math.round((completed / progress.total) * 100) : 0
+
+  return (
+    <div className="bg-[#f5f5f4] rounded-xl px-4 py-2.5 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm flex-wrap">
+          <span className="text-[#171717] font-medium">{progress.done} done</span>
+          {progress.skipped > 0 && (
+            <><span className="text-[#a3a3a3]">·</span><span className="text-[#737373]">{progress.skipped} skipped</span></>
+          )}
+          {progress.failed > 0 && (
+            <><span className="text-[#a3a3a3]">·</span><span className="text-red-600">{progress.failed} failed</span></>
+          )}
+        </div>
+        <span className="text-xs text-[#a3a3a3] shrink-0">{completed}/{progress.total}</span>
+      </div>
+      <div className="bg-[#e5e5e5] rounded-full h-1.5 w-full">
+        <div
+          className="bg-[#171717] rounded-full h-1.5 transition-all duration-300"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {progress.groupLabel && (
+        <p className="text-xs text-[#a3a3a3] truncate">{progress.groupLabel}</p>
+      )}
+    </div>
+  )
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 export default function AdminClient({ initialEntries, initialTrips }: { initialEntries: Entry[]; initialTrips: Trip[] }) {
   const router = useRouter()
@@ -335,10 +376,10 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
   const [bulkGroups, setBulkGroups]       = useState<BulkGroup[]>([])
   const [bulkAnalyzing, setBulkAnalyzing] = useState(false)
   const [bulkSubmitting, setBulkSubmitting] = useState(false)
-  const [bulkProgress, setBulkProgress]   = useState<string | null>(null)
   const [bulkSummary, setBulkSummary]     = useState<UploadSummary | null>(null)
   const [retrying, setRetrying]           = useState(false)
   const [retryQueue, setRetryQueue]       = useState<Array<{ file: File; entryId: string }>>([])
+  const [bulkProgressState, setBulkProgressState] = useState<BulkProgressState | null>(null)
 
   const [geoLocating, setGeoLocating]     = useState(false)
   // null = closed, 'entry' = single form, number = bulk group index
@@ -528,7 +569,13 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
     try {
       for (let i = 0; i < bulkGroups.length; i++) {
         const g = bulkGroups[i]
-        setBulkProgress(`Creating entry ${i + 1} of ${bulkGroups.length}: ${g.title}…`)
+        setBulkProgressState({
+          done: totalDone,
+          skipped: totalSkipped,
+          failed: totalFailed,
+          total: g.files.length,
+          groupLabel: `Group ${i + 1}/${bulkGroups.length} · ${g.title}`,
+        })
 
         const entryRes = await fetch('/api/entries', {
           method: 'POST',
@@ -547,8 +594,14 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         if (!entryRes.ok) continue
         const entry = await entryRes.json()
 
-        const groupSummary = await uploadInParallel(g.files, entry.id, ({ done, total }) =>
-          setBulkProgress(`Group ${i + 1}/${bulkGroups.length} · ${done}/${total} files: ${g.title}…`)
+        const groupSummary = await uploadInParallel(g.files, entry.id, ({ done, skipped, failed, total }) =>
+          setBulkProgressState({
+            done,
+            skipped,
+            failed,
+            total,
+            groupLabel: `Group ${i + 1}/${bulkGroups.length} · ${g.title}`,
+          })
         )
         totalDone    += groupSummary.done
         totalSkipped += groupSummary.skipped
@@ -568,13 +621,13 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
       } else {
         // Everything succeeded cleanly — no modal, navigate immediately (D-04)
         setBulkGroups([])
-        setBulkProgress(null)
+        setBulkProgressState(null)
         setTab('entries')
         router.refresh()
         const freshRes = await fetch('/api/entries')
         if (freshRes.ok) setEntries(await freshRes.json())
       }
-    } finally { setBulkSubmitting(false); setBulkProgress(null) }
+    } finally { setBulkSubmitting(false); setBulkProgressState(null) }
   }
 
   async function handleCreateTrip(e: React.FormEvent) {
@@ -865,12 +918,12 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                   <div className="flex gap-2">
                     <button onClick={() => setBulkGroups([])} className="px-4 py-2 rounded-xl border border-[#e5e5e5] text-sm text-[#737373] hover:text-[#171717] hover:border-[#d4d4d4] transition-colors cursor-pointer">Start over</button>
                     <button onClick={handleBulkCreate} disabled={bulkSubmitting} className="px-4 py-2 rounded-xl bg-[#171717] text-white text-sm font-medium hover:bg-[#404040] disabled:opacity-50 transition-colors cursor-pointer">
-                      {bulkSubmitting ? bulkProgress ?? 'Creating…' : `Create ${bulkGroups.length} entr${bulkGroups.length !== 1 ? 'ies' : 'y'}`}
+                      {bulkSubmitting ? 'Creating…' : `Create ${bulkGroups.length} entr${bulkGroups.length !== 1 ? 'ies' : 'y'}`}
                     </button>
                   </div>
                 </div>
 
-                {bulkProgress && <p className="text-sm text-[#737373] bg-[#f5f5f4] rounded-xl px-4 py-2.5">{bulkProgress}</p>}
+                {bulkProgressState && <UploadProgressBar progress={bulkProgressState} />}
 
                 {/* Banner: stamp all GPS-less groups with current location */}
                 {bulkGroups.some(g => !g.latitude) && (
@@ -976,7 +1029,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
 
                 <div className="flex justify-end">
                   <button onClick={handleBulkCreate} disabled={bulkSubmitting} className="px-6 py-2.5 rounded-xl bg-[#171717] text-white text-sm font-medium hover:bg-[#404040] disabled:opacity-50 transition-colors cursor-pointer">
-                    {bulkSubmitting ? bulkProgress ?? 'Creating…' : `Create ${bulkGroups.length} entr${bulkGroups.length !== 1 ? 'ies' : 'y'}`}
+                    {bulkSubmitting ? 'Creating…' : `Create ${bulkGroups.length} entr${bulkGroups.length !== 1 ? 'ies' : 'y'}`}
                   </button>
                 </div>
               </>
@@ -1115,7 +1168,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
             setBulkSummary(null)
             setRetryQueue([])
             setBulkGroups([])
-            setBulkProgress(null)
+            setBulkProgressState(null)
             setTab('entries')
             router.refresh()
             fetch('/api/entries').then(r => r.ok ? r.json() : null).then(d => d && setEntries(d))

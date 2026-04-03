@@ -41,7 +41,7 @@ Phase 2 Plan 03 executed. BulkProgressState interface + UploadProgressBar compon
 
 - Stack: Next.js 16, Prisma 6, Supabase, Mapbox GL JS v3, Vercel
 - Map pins: FIXED — GL symbol layer with HTMLImageElement sprites; progressive loading with SPRITE_DEFAULT fallback; 200ms fade-in
-- Upload: uploadInParallel now reads res.json() and classifies per-file done/skipped/failed; returns UploadSummary
+- Upload: uploadInParallel now reads res.json() and classifies per-file done/skipped/failed; returns UploadSummary; UploadProgressBar shows live count summary during bulk upload
 - Images: all via /api/media/url/[filename] auth proxy → Supabase signed URL; unoptimized:true
 - Weather: Open-Meteo historical API (free, no key) — not yet implemented (Phase 4)
 
