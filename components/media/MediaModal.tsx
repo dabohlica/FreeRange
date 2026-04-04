@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import Image from 'next/image'
 
 interface MediaItem {
@@ -21,6 +21,7 @@ interface MediaModalProps {
 
 export default function MediaModal({ media, initialIndex = 0, onClose }: MediaModalProps) {
   const [index, setIndex] = useState(initialIndex)
+  const touchStartX = useRef<number | null>(null)
 
   const prev = useCallback(() => setIndex((i) => (i > 0 ? i - 1 : media.length - 1)), [media.length])
   const next = useCallback(() => setIndex((i) => (i < media.length - 1 ? i + 1 : 0)), [media.length])
@@ -35,6 +36,17 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose, prev, next])
 
+  function onTouchStart(e: React.TouchEvent) {
+    touchStartX.current = e.touches[0].clientX
+  }
+
+  function onTouchEnd(e: React.TouchEvent) {
+    if (touchStartX.current === null) return
+    const dx = e.changedTouches[0].clientX - touchStartX.current
+    if (Math.abs(dx) > 50) dx < 0 ? next() : prev()
+    touchStartX.current = null
+  }
+
   const current = media[index]
   if (!current) return null
 
@@ -42,6 +54,8 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
     <div
       className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center"
       onClick={onClose}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
     >
       {/* Close */}
       <button
@@ -65,7 +79,7 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
       {media.length > 1 && (
         <button
           onClick={(e) => { e.stopPropagation(); prev() }}
-          className="absolute left-4 p-3 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+          className="absolute left-4 z-10 p-3 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15 18 9 12 15 6"/>
