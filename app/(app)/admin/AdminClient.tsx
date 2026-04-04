@@ -87,6 +87,11 @@ function autoTitle(date: string, city?: string, country?: string): string {
 
 // ── Group files by day + location proximity ──────────────────────────────────
 // existingEntries is used to detect whether a new group matches an already-stored entry.
+// Format a Date as YYYY-MM-DD using LOCAL time (not UTC) to avoid timezone drift
+function localDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 async function groupFiles(
   files: File[],
   existingEntries: Entry[]
@@ -98,7 +103,8 @@ async function groupFiles(
   const THRESHOLD_KM = 8
 
   for (const { file, exif } of metas) {
-    const day = exif.date ? exif.date.toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
+    // Use local date string to avoid UTC shift for evening photos in UTC+ timezones
+    const day = exif.date ? localDateStr(exif.date) : localDateStr(new Date())
     let matched = false
 
     for (const g of groups) {
@@ -132,7 +138,7 @@ async function groupFiles(
   }
 
   return groups.map((g, i) => {
-    const date = g.dates[0]?.toISOString().split('T')[0] ?? new Date().toISOString().split('T')[0]
+    const date = g.dates[0] ? localDateStr(g.dates[0]) : localDateStr(new Date())
     const avgLat = g.lats.length ? (g.lats.reduce((a, b) => a + b, 0) / g.lats.length).toFixed(6) : ''
     const avgLng = g.lngs.length ? (g.lngs.reduce((a, b) => a + b, 0) / g.lngs.length).toFixed(6) : ''
 
@@ -143,6 +149,7 @@ async function groupFiles(
     const gLng = avgLng ? parseFloat(avgLng) : null
     for (const entry of existingEntries) {
       if (entry.date.split('T')[0] !== date) continue
+      // Only apply distance check when BOTH sides have GPS — if either lacks GPS, match by day alone
       if (gLat != null && gLng != null && entry.latitude != null && entry.longitude != null) {
         if (distanceKm(gLat, gLng, entry.latitude, entry.longitude) > THRESHOLD_KM) continue
       }
