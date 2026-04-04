@@ -945,8 +945,39 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                   </div>
                 )}
 
+                {/* Matched groups — compact read-only, no new entry created */}
+                {bulkGroups.some(g => g.matchedEntryId) && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 space-y-2">
+                    <p className="text-xs font-medium text-emerald-800">Adding to existing entries</p>
+                    {bulkGroups.filter(g => g.matchedEntryId).map(group => (
+                      <div key={group.key} className="flex items-center gap-3">
+                        <div className="flex gap-1">
+                          {group.previews.slice(0, 3).map((src, pi) => (
+                            <div key={pi} className="w-8 h-8 shrink-0 rounded-md overflow-hidden bg-emerald-100">
+                              <img src={src} alt="" className="w-full h-full object-cover" />
+                            </div>
+                          ))}
+                          {group.files.length > 3 && (
+                            <div className="w-8 h-8 shrink-0 rounded-md bg-emerald-100 flex items-center justify-center text-[10px] text-emerald-700 font-medium">
+                              +{group.files.length - 3}
+                            </div>
+                          )}
+                        </div>
+                        <p className="text-xs text-emerald-700 flex-1 min-w-0">
+                          <span className="font-medium">{group.files.length} photo{group.files.length !== 1 ? 's' : ''}</span>
+                          {' → '}
+                          <span className="truncate">&ldquo;{group.matchedEntryTitle}&rdquo;</span>
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* New groups — full editable cards */}
                 <div className="space-y-4">
-                  {bulkGroups.map((group, gi) => (
+                  {bulkGroups.filter(g => !g.matchedEntryId).map((group) => {
+                    const gi = bulkGroups.indexOf(group)
+                    return (
                     <div key={group.key} className="bg-white rounded-2xl border border-[#e5e5e5] p-5">
                       <div className="flex gap-1.5 mb-4">
                         {group.previews.map((src, pi) => (
@@ -962,12 +993,6 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                         <div className="ml-2 flex flex-col justify-center gap-1">
                           <span className="text-sm font-medium text-[#171717]">{group.files.length} photo{group.files.length !== 1 ? 's' : ''}</span>
                           <span className="text-xs text-[#a3a3a3]">{group.date}</span>
-                          {group.matchedEntryId && (
-                            <span className="inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-1.5 py-0.5 w-fit">
-                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                              Adding to &ldquo;{group.matchedEntryTitle}&rdquo;
-                            </span>
-                          )}
                         </div>
                       </div>
 
@@ -1033,14 +1058,24 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                         </button>
                       )}
                     </div>
-                  ))}
+                  )})}
                 </div>
 
                 {bulkStage === 'reviewing' && (
                   <div className="flex justify-end">
-                    <button onClick={handleBulkCreate} className="px-6 py-2.5 rounded-xl bg-[#171717] text-white text-sm font-medium hover:bg-[#404040] transition-colors cursor-pointer">
-                      Create {bulkGroups.length} entr{bulkGroups.length !== 1 ? 'ies' : 'y'}
-                    </button>
+                    {(() => {
+                      const newCount = bulkGroups.filter(g => !g.matchedEntryId).length
+                      const addCount = bulkGroups.filter(g =>  g.matchedEntryId).length
+                      const label = [
+                        newCount > 0 && `Create ${newCount} entr${newCount !== 1 ? 'ies' : 'y'}`,
+                        addCount > 0 && `add to ${addCount} existing`,
+                      ].filter(Boolean).join(' & ')
+                      return (
+                        <button onClick={handleBulkCreate} className="px-6 py-2.5 rounded-xl bg-[#171717] text-white text-sm font-medium hover:bg-[#404040] transition-colors cursor-pointer">
+                          {label}
+                        </button>
+                      )
+                    })()}
                   </div>
                 )}
               </>
