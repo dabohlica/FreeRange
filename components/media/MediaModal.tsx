@@ -46,7 +46,7 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
       {/* Close */}
       <button
         onClick={onClose}
-        className="absolute top-4 right-4 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+        className="absolute top-16 sm:top-4 right-4 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
           <line x1="18" y1="6" x2="6" y2="18"/>
@@ -75,7 +75,7 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
 
       {/* Media */}
       <div
-        className="max-w-5xl max-h-[85vh] w-full h-full flex items-center justify-center px-16"
+        className="max-w-5xl max-h-[85vh] w-full h-full flex items-center justify-center sm:px-16"
         onClick={(e) => e.stopPropagation()}
       >
         {current.type === 'VIDEO' ? (
