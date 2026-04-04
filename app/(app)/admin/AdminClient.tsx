@@ -34,6 +34,9 @@ interface BulkGroup {
   title: string
   description: string
   tripId: string
+  // Set when this group matches an existing entry
+  matchedEntryId?: string
+  matchedEntryTitle?: string
 }
 
 type BulkStage = 'idle' | 'analyzing' | 'reviewing' | 'uploading' | 'resetting'
@@ -83,7 +86,11 @@ function autoTitle(date: string, city?: string, country?: string): string {
 }
 
 // ── Group files by day + location proximity ──────────────────────────────────
-async function groupFiles(files: File[]): Promise<BulkGroup[]> {
+// existingEntries is used to detect whether a new group matches an already-stored entry.
+async function groupFiles(
+  files: File[],
+  existingEntries: Entry[]
+): Promise<BulkGroup[]> {
   const metas = await Promise.all(files.map(async (f) => ({ file: f, exif: await extractExifFromFile(f) })))
   metas.sort((a, b) => (a.exif.date?.getTime() ?? 0) - (b.exif.date?.getTime() ?? 0))
 
@@ -128,6 +135,22 @@ async function groupFiles(files: File[]): Promise<BulkGroup[]> {
     const date = g.dates[0]?.toISOString().split('T')[0] ?? new Date().toISOString().split('T')[0]
     const avgLat = g.lats.length ? (g.lats.reduce((a, b) => a + b, 0) / g.lats.length).toFixed(6) : ''
     const avgLng = g.lngs.length ? (g.lngs.reduce((a, b) => a + b, 0) / g.lngs.length).toFixed(6) : ''
+
+    // Check if this group matches an existing entry: same day, within 8 km (or same day + no GPS on either)
+    let matchedEntryId: string | undefined
+    let matchedEntryTitle: string | undefined
+    const gLat = avgLat ? parseFloat(avgLat) : null
+    const gLng = avgLng ? parseFloat(avgLng) : null
+    for (const entry of existingEntries) {
+      if (entry.date.split('T')[0] !== date) continue
+      if (gLat != null && gLng != null && entry.latitude != null && entry.longitude != null) {
+        if (distanceKm(gLat, gLng, entry.latitude, entry.longitude) > THRESHOLD_KM) continue
+      }
+      matchedEntryId    = entry.id
+      matchedEntryTitle = entry.title
+      break
+    }
+
     return {
       key: `group-${i}-${date}`,
       files: g.files,
@@ -136,6 +159,8 @@ async function groupFiles(files: File[]): Promise<BulkGroup[]> {
       city: '', country: '',
       title: autoTitle(date),
       description: '', tripId: '',
+      matchedEntryId,
+      matchedEntryTitle,
     }
   })
 }
@@ -329,13 +354,13 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
     setBulkStage('analyzing')
     setBulkGroups([])
     try {
-      const groups = await groupFiles(accepted)
+      const groups = await groupFiles(accepted, entries)
       setBulkGroups(groups)
       setBulkStage('reviewing')
     } catch {
       setBulkStage('idle')
     }
-  }, [])
+  }, [entries])
 
   // ── Start Over: abort + await cleanup + remount dropzone ─────────────────
   async function handleStartOver() {
@@ -480,24 +505,31 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
 
         setBulkProgress({ groupIdx: gi + 1, groupCount: bulkGroups.length, fileDone: 0, fileTotal: g.files.length, label: g.title })
 
-        const entryRes = await fetch('/api/entries', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title:       g.title       || undefined,
-            description: g.description || null,
-            date:        g.date,
-            latitude:    g.latitude    || null,
-            longitude:   g.longitude   || null,
-            city:        g.city        || null,
-            country:     g.country     || null,
-            tripId:      g.tripId      || null,
-          }),
-          signal: abort.signal,
-        })
-        if (!entryRes.ok) continue
-        const entry = await entryRes.json()
-        bulkCreatedIdsRef.current.push(entry.id)
+        let entryId: string
+        if (g.matchedEntryId) {
+          // Add to existing entry — no new entry created
+          entryId = g.matchedEntryId
+        } else {
+          const entryRes = await fetch('/api/entries', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title:       g.title       || undefined,
+              description: g.description || null,
+              date:        g.date,
+              latitude:    g.latitude    || null,
+              longitude:   g.longitude   || null,
+              city:        g.city        || null,
+              country:     g.country     || null,
+              tripId:      g.tripId      || null,
+            }),
+            signal: abort.signal,
+          })
+          if (!entryRes.ok) continue
+          const entry = await entryRes.json()
+          entryId = entry.id
+          bulkCreatedIdsRef.current.push(entryId)
+        }
 
         // Upload files 3 at a time
         const CONCURRENCY = 3
@@ -506,7 +538,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
           if (abort.signal.aborted) break
           const batch = g.files.slice(fi, fi + CONCURRENCY)
           await Promise.all(batch.map(async (file) => {
-            const result = await uploadFile(file, entry.id, abort.signal)
+            const result = await uploadFile(file, entryId, abort.signal)
             if (result.status === 'done')    { totalDone++;    setBulkDone(d => d + 1) }
             if (result.status === 'skipped') { totalSkipped++; setBulkSkipped(s => s + 1) }
             if (result.status === 'failed')  {
@@ -822,7 +854,10 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="font-semibold text-[#171717]">{bulkGroups.length} group{bulkGroups.length !== 1 ? 's' : ''} detected</p>
-                    <p className="text-xs text-[#a3a3a3] mt-0.5">{bulkGroups.reduce((s, g) => s + g.files.length, 0)} photos total · Review and edit before creating</p>
+                    <p className="text-xs text-[#a3a3a3] mt-0.5">
+                      {bulkGroups.reduce((s, g) => s + g.files.length, 0)} photos ·{' '}
+                      {bulkGroups.filter(g => !g.matchedEntryId).length} new entr{bulkGroups.filter(g => !g.matchedEntryId).length !== 1 ? 'ies' : 'y'}{bulkGroups.some(g => g.matchedEntryId) ? `, ${bulkGroups.filter(g => g.matchedEntryId).length} adding to existing` : ''}
+                    </p>
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -917,9 +952,15 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                             +{group.files.length - 4}
                           </div>
                         )}
-                        <div className="ml-2 flex flex-col justify-center">
+                        <div className="ml-2 flex flex-col justify-center gap-1">
                           <span className="text-sm font-medium text-[#171717]">{group.files.length} photo{group.files.length !== 1 ? 's' : ''}</span>
                           <span className="text-xs text-[#a3a3a3]">{group.date}</span>
+                          {group.matchedEntryId && (
+                            <span className="inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-1.5 py-0.5 w-fit">
+                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                              Adding to &ldquo;{group.matchedEntryTitle}&rdquo;
+                            </span>
+                          )}
                         </div>
                       </div>
 
