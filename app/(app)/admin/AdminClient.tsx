@@ -140,33 +140,94 @@ async function groupFiles(files: File[]): Promise<BulkGroup[]> {
   })
 }
 
-// ── Single file upload with retry ────────────────────────────────────────────
-async function uploadFile(
-  file: File,
-  entryId: string,
-  signal: AbortSignal,
-): Promise<'done' | 'skipped' | 'failed'> {
+// ── Single file upload ────────────────────────────────────────────────────────
+// Uses Supabase signed upload URLs (browser → Supabase directly, bypassing any
+// Next.js body size limits), then registers the media record via /api/upload/register.
+// Falls back to /api/upload (direct route) for local dev without Supabase.
+type UploadResult = { status: 'done' | 'skipped' | 'failed'; error?: string }
+
+async function uploadFile(file: File, entryId: string, signal: AbortSignal): Promise<UploadResult> {
+  if (signal.aborted) return { status: 'failed', error: 'Cancelled' }
+  try {
+    // Step 1: request a signed upload URL
+    const signedRes = await fetch('/api/upload/signed-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name }),
+      signal,
+    })
+
+    if (!signedRes.ok) {
+      if (signedRes.status === 500) {
+        const err = await signedRes.json().catch(() => ({}))
+        // Supabase not configured — fall back to direct upload
+        if ((err.error as string)?.includes('not configured')) {
+          return uploadFileDirect(file, entryId, signal)
+        }
+        return { status: 'failed', error: err.error || 'Failed to get upload URL' }
+      }
+      return uploadFileDirect(file, entryId, signal)
+    }
+
+    const { signedUrl, storedFilename } = await signedRes.json()
+
+    // Step 2: PUT the file directly to Supabase (no Next.js in the middle)
+    const uploadRes = await fetch(signedUrl, {
+      method: 'PUT',
+      body: file,
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      signal,
+    })
+    if (!uploadRes.ok) {
+      const text = await uploadRes.text().catch(() => '')
+      return { status: 'failed', error: `Storage upload failed (${uploadRes.status}): ${text.slice(0, 200)}` }
+    }
+
+    // Step 3: register the media record (EXIF extraction, hash dedup, DB insert)
+    const regRes = await fetch('/api/upload/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entryId, storedFilename, originalName: file.name, size: file.size }),
+      signal,
+    })
+    const regData = await regRes.json()
+    if (!regRes.ok) return { status: 'failed', error: regData.error || `Register failed (${regRes.status})` }
+    if (regData.success)  return { status: 'done' }
+    if (regData.skipped)  return { status: 'skipped' }
+    return { status: 'failed', error: regData.error || 'Unexpected register response' }
+
+  } catch (e) {
+    if ((e as DOMException).name === 'AbortError') return { status: 'failed', error: 'Cancelled' }
+    return { status: 'failed', error: (e as Error).message }
+  }
+}
+
+// Fallback for local dev (no Supabase) — uploads through the Next.js route handler
+async function uploadFileDirect(file: File, entryId: string, signal: AbortSignal): Promise<UploadResult> {
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (signal.aborted) return 'failed'
+    if (signal.aborted) return { status: 'failed', error: 'Cancelled' }
     if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt))
     try {
       const form = new FormData()
       form.append('entryId', entryId)
-      form.append('files', file)
+      form.append('file', file)
       const res = await fetch('/api/upload', { method: 'POST', body: form, signal })
+      const data = await res.json()
       if (!res.ok) {
-        if (res.status < 500) return 'failed'
-        continue
+        if (res.status < 500) return { status: 'failed', error: data.error || `HTTP ${res.status}` }
+        if (attempt < 2) continue
+        return { status: 'failed', error: data.error || `Server error ${res.status}` }
       }
-      const { results } = await res.json()
-      const r = results?.[0]
-      if (r?.success) return 'done'
-      if (r?.skipped) return 'skipped'
+      if (data.success)  return { status: 'done' }
+      if (data.skipped)  return { status: 'skipped' }
+      return { status: 'failed', error: data.error || 'Unexpected response' }
     } catch (e) {
-      if ((e as DOMException).name === 'AbortError') return 'failed'
+      if ((e as DOMException).name === 'AbortError') return { status: 'failed', error: 'Cancelled' }
+      if (attempt < 2) continue
+      return { status: 'failed', error: (e as Error).message }
     }
   }
-  return 'failed'
+  return { status: 'failed', error: 'Max retries exceeded' }
 }
 
 // ── Bulk dropzone (separate component so key remount resets the file input) ──
@@ -212,9 +273,10 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
     groupIdx: number; groupCount: number
     fileDone: number; fileTotal: number; label: string
   } | null>(null)
-  const [bulkDone, setBulkDone]     = useState(0)
+  const [bulkDone, setBulkDone]       = useState(0)
   const [bulkSkipped, setBulkSkipped] = useState(0)
-  const [bulkFailed, setBulkFailed] = useState(0)
+  const [bulkFailed, setBulkFailed]   = useState(0)
+  const [bulkErrors, setBulkErrors]   = useState<string[]>([])
   const [dropzoneKey, setDropzoneKey] = useState(0)  // increment to remount file input
   const bulkAbortRef      = useRef<AbortController | null>(null)
   const bulkCreatedIdsRef = useRef<string[]>([])
@@ -282,7 +344,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
     setBulkStage('resetting')
     setBulkGroups([])
     setBulkProgress(null)
-    setBulkDone(0); setBulkSkipped(0); setBulkFailed(0)
+    setBulkDone(0); setBulkSkipped(0); setBulkFailed(0); setBulkErrors([])
     // Await cleanup so hashes are gone before the user can re-upload
     if (ids.length > 0) {
       await Promise.allSettled(ids.map(id => fetch(`/api/entries/${id}`, { method: 'DELETE' })))
@@ -407,7 +469,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
     bulkAbortRef.current = abort
     bulkCreatedIdsRef.current = []
     setBulkStage('uploading')
-    setBulkDone(0); setBulkSkipped(0); setBulkFailed(0)
+    setBulkDone(0); setBulkSkipped(0); setBulkFailed(0); setBulkErrors([])
 
     let totalDone = 0, totalSkipped = 0, totalFailed = 0
 
@@ -445,9 +507,13 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
           const batch = g.files.slice(fi, fi + CONCURRENCY)
           await Promise.all(batch.map(async (file) => {
             const result = await uploadFile(file, entry.id, abort.signal)
-            if (result === 'done')    { totalDone++;    setBulkDone(d => d + 1) }
-            if (result === 'skipped') { totalSkipped++; setBulkSkipped(s => s + 1) }
-            if (result === 'failed')  { totalFailed++;  setBulkFailed(f => f + 1) }
+            if (result.status === 'done')    { totalDone++;    setBulkDone(d => d + 1) }
+            if (result.status === 'skipped') { totalSkipped++; setBulkSkipped(s => s + 1) }
+            if (result.status === 'failed')  {
+              totalFailed++
+              setBulkFailed(f => f + 1)
+              if (result.error) setBulkErrors(e => [...e, `${file.name}: ${result.error}`])
+            }
             fileDone++
             setBulkProgress({ groupIdx: gi + 1, groupCount: bulkGroups.length, fileDone, fileTotal: g.files.length, label: g.title })
           }))
@@ -795,16 +861,25 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
 
                 {/* Results after upload */}
                 {bulkStage === 'reviewing' && (bulkDone > 0 || bulkSkipped > 0 || bulkFailed > 0) && (
-                  <div className="bg-[#f0fdf4] border border-[#86efac] rounded-xl px-4 py-3 flex items-center justify-between gap-4">
-                    <div className="flex gap-4 text-sm">
-                      <span className="text-[#166534]">{bulkDone} uploaded</span>
-                      {bulkSkipped > 0 && <span className="text-[#737373]">{bulkSkipped} skipped (duplicates)</span>}
-                      {bulkFailed  > 0 && <span className="text-red-600">{bulkFailed} failed — try again</span>}
+                  <div className={`border rounded-xl px-4 py-3 space-y-2 ${bulkFailed > 0 ? 'bg-red-50 border-red-200' : 'bg-[#f0fdf4] border-[#86efac]'}`}>
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex gap-4 text-sm flex-wrap">
+                        {bulkDone    > 0 && <span className="text-[#166534]">{bulkDone} uploaded</span>}
+                        {bulkSkipped > 0 && <span className="text-[#737373]">{bulkSkipped} skipped (duplicates)</span>}
+                        {bulkFailed  > 0 && <span className="text-red-600 font-medium">{bulkFailed} failed</span>}
+                      </div>
+                      <button onClick={() => { setTab('entries'); router.refresh(); fetch('/api/entries').then(r => r.ok ? r.json() : null).then(d => d && setEntries(d)) }}
+                        className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-[#171717] text-white hover:bg-[#404040] transition-colors cursor-pointer">
+                        Go to entries
+                      </button>
                     </div>
-                    <button onClick={() => { setTab('entries'); router.refresh(); fetch('/api/entries').then(r => r.ok ? r.json() : null).then(d => d && setEntries(d)) }}
-                      className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-[#171717] text-white hover:bg-[#404040] transition-colors cursor-pointer">
-                      Go to entries
-                    </button>
+                    {bulkErrors.length > 0 && (
+                      <div className="space-y-1">
+                        {bulkErrors.map((e, i) => (
+                          <p key={i} className="text-xs text-red-700 font-mono break-all">{e}</p>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 
