@@ -10,6 +10,11 @@ Every entry lands as a photo pin on a fullscreen Mapbox map. Pins show circular 
 ### 📸 Photo & Video Upload
 Drag and drop photos and videos directly onto an entry. EXIF GPS data is extracted automatically and used to place the entry on the map. City and country are reverse-geocoded in the background. Supports JPEG, PNG, HEIC, WebP, MP4, MOV and more — up to 100 MB per file.
 
+> **⚠️ Mobile upload and GPS metadata**
+> Both Android and iOS strip GPS (and other EXIF) metadata from images when you upload or share them through the browser for privacy reasons. If you upload photos directly from your phone, location data will not be extracted automatically and you will need to set the location manually on the entry.
+>
+> To preserve GPS metadata, **upload from a desktop or laptop** where the original files are stored — the EXIF data remains intact there. Alternatively, transfer the original files from your phone to your computer first (via cable, AirDrop, or a sync folder), then upload from there.
+
 ### 📦 Bulk Upload
 Drop an entire trip's worth of photos at once. FreeRange groups them by date and location automatically, matches them to existing entries, and uploads everything in parallel with live progress. Duplicates are skipped via SHA-256 hashing — re-uploading the same photo does nothing.
 
