@@ -49,7 +49,7 @@ export default function LoginPage() {
             </svg>
           </div>
           <h1 className="text-3xl font-['Playfair_Display'] font-semibold text-[#171717] tracking-tight">
-            TravelTrace
+            FreeRange
           </h1>
           <p className="mt-2 text-sm text-[#737373]">Your private travel journal</p>
         </div>

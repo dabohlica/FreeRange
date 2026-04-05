@@ -87,7 +87,7 @@ export default function Navigation({ role }: { role?: string }) {
             </svg>
           </div>
           <span className="text-sm font-['Playfair_Display'] font-semibold text-[#171717] hidden sm:block">
-            TravelTrace
+            FreeRange
           </span>
         </Link>
 

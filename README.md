@@ -1,4 +1,4 @@
-# TravelTrace
+# FreeRange
 
 A private, self-hosted travel journal — your own Polarsteps.
 
@@ -278,7 +278,7 @@ npm run setup
 
 # Run with PM2
 npm install -g pm2
-pm2 start npm --name traveltrace -- start
+pm2 start npm --name freerange -- start
 pm2 save && pm2 startup
 ```
 

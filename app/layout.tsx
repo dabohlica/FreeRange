@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'TravelTrace — Your Private Travel Journal',
+  title: 'FreeRange — Your Private Travel Journal',
   description: 'A private, self-hosted travel journal with live GPS tracking and photo maps.',
 }
 

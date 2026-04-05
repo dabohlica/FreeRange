@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
   const author = await prisma.user.upsert({
     where: { id: 'system-admin' },
     update: {},
-    create: { id: 'system-admin', email: 'admin@traveltrace.local', password: 'n/a', role: 'ADMIN' },
+    create: { id: 'system-admin', email: 'admin@freerange.local', password: 'n/a', role: 'ADMIN' },
   })
 
   const resolvedTitle = (title as string | undefined)?.trim() || autoTitle(date, city, country)

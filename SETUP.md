@@ -1,4 +1,4 @@
-# TravelTrace — Setup Guide
+# FreeRange — Setup Guide
 
 ## Quick Start (Docker — recommended)
 
