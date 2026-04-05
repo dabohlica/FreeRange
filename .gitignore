@@ -39,6 +39,9 @@ yarn-error.log*
 # Claude Code local settings (may contain credentials from shell history)
 .claude/
 
+# Internal planning and development notes
+.planning/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
