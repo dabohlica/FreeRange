@@ -1,4 +1,4 @@
-# FreeRange
+![Screenshot_20260404_091635_Ecosia](https://github.com/user-attachments/assets/7c61ad15-2299-450e-a396-3c143b51484b)![Screenshot_20260404_091756_Ecosia](https://github.com/user-attachments/assets/969177fc-389b-4fe0-b85d-019916cd4674)# FreeRange
 
 A private, self-hosted travel journal — your own Polarsteps. Own your data, run it yourself, share it with the people you choose.
 
@@ -34,8 +34,9 @@ Connect a PAJ GPS tracker and a pulsing dot shows your real-time position on the
 Organise entries into named trips with custom colours. Trips appear as coloured badges on timeline cards and as distinct pin clusters on the map.
 
 ---
-
+![Screenshot_20260404_091448_Ecosia](https://github.com/user-attachments/assets/84cbb184-d3f8-4057-be14-37c2aa64a99f)
 ---
+
 
 ## Tech Stack
 
