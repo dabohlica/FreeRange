@@ -315,4 +315,4 @@ Vercel only runs `prisma generate` — it no longer auto-pushes schema changes. 
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+**CC BY-NC 4.0** — free to use, modify, and self-host. Commercial use (selling access, paid products/services built on this) is not permitted without explicit permission. See [LICENSE](LICENSE).
