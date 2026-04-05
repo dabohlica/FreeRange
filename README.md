@@ -1,21 +1,34 @@
 # FreeRange
 
-A private, self-hosted travel journal — your own Polarsteps.
-
-Track your live GPS location, upload photos & videos, map your memories, and share privately with friends via a single password.
+A private, self-hosted travel journal — your own Polarsteps. Own your data, run it yourself, share it with the people you choose.
 
 ---
 
-## Features
+### 🗺️ Interactive Map
+Every entry lands as a photo pin on a fullscreen Mapbox map. Pins show circular photo thumbnails — click any pin to preview the entry. Entries are grouped into **trips** with custom colours, so a two-month road trip is visually distinct from a weekend city break. Zoom in, zoom out — pins stay crisp and stable.
 
-- **Fullscreen interactive map** — Mapbox-based, photo pin markers, click-to-preview
-- **Live GPS tracking** — PAJ tracker integration + manual update fallback, auto-refresh every 45s
-- **Photo & video upload** — drag & drop, EXIF GPS extraction, auto-maps media to location
-- **Timeline** — chronological feed grouped by month, trip colour badges
-- **Media gallery** — grid view + map view, fullscreen viewer with swipe/keyboard navigation
-- **Trip grouping** — organise entries under named trips with custom colours
-- **Private sharing** — two passwords: admin (full access) + viewer (read-only), no accounts needed
-- **Reverse geocoding** — auto-detects city & country from coordinates via Mapbox
+### 📸 Photo & Video Upload
+Drag and drop photos and videos directly onto an entry. EXIF GPS data is extracted automatically and used to place the entry on the map. City and country are reverse-geocoded in the background. Supports JPEG, PNG, HEIC, WebP, MP4, MOV and more — up to 100 MB per file.
+
+### 📦 Bulk Upload
+Drop an entire trip's worth of photos at once. FreeRange groups them by date and location automatically, matches them to existing entries, and uploads everything in parallel with live progress. Duplicates are skipped via SHA-256 hashing — re-uploading the same photo does nothing.
+
+### 📅 Timeline
+A chronological feed of all entries, grouped by month. Each entry shows its photos, location, trip badge, and description. Tap any photo to open the full-screen viewer.
+
+### 🖼️ Photo Gallery
+All your media in one place — grid view or map view. Fullscreen viewer with swipe (mobile) and keyboard navigation (desktop). Filter by photos or videos.
+
+### 🔐 Simple Private Sharing
+No accounts, no sign-up. Just two passwords: one for you (admin — create, edit, upload) and one to share with family and friends (viewer — read-only). Hand someone the URL and the viewer password and they're in.
+
+### 📍 Live Location
+Connect a PAJ GPS tracker and a pulsing dot shows your real-time position on the map, updated every 45 seconds. No tracker? Set your location manually from the admin panel.
+
+### ✈️ Trip Grouping
+Organise entries into named trips with custom colours. Trips appear as coloured badges on timeline cards and as distinct pin clusters on the map.
+
+---
 
 ---
 
