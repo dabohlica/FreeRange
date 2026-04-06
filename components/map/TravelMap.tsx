@@ -25,6 +25,7 @@ interface TravelMapProps {
   entries: Entry[]
   liveLocation?: LiveLocation | null
   onEntryClick?: (entry: Entry) => void
+  onMapReady?: (map: mapboxgl.Map) => void
 }
 
 const SOURCE_ID  = 'entries-source'
@@ -150,15 +151,17 @@ function fitEntries(map: mapboxgl.Map, entries: Entry[]) {
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export default function TravelMap({ entries, liveLocation, onEntryClick }: TravelMapProps) {
+export default function TravelMap({ entries, liveLocation, onEntryClick, onMapReady }: TravelMapProps) {
   const containerRef  = useRef<HTMLDivElement>(null)
   const mapRef        = useRef<mapboxgl.Map | null>(null)
   const liveMarkerRef = useRef<mapboxgl.Marker | null>(null)
   const entriesRef    = useRef<Entry[]>(entries)
   const onClickRef    = useRef(onEntryClick)
+  const onMapReadyRef = useRef(onMapReady)
 
   entriesRef.current = entries
   onClickRef.current = onEntryClick
+  onMapReadyRef.current = onMapReady
 
   // Helper: return set of entry IDs that have a loaded sprite on the map
   function getLoadedSpriteIds(map: mapboxgl.Map, ents: Entry[]): Set<string> {
@@ -307,6 +310,8 @@ export default function TravelMap({ entries, liveLocation, onEntryClick }: Trave
 
       // Progressive photo sprite loading (fire-and-forget, non-blocking)
       loadSpritesProgressive(map, entriesRef.current)
+
+      onMapReadyRef.current?.(map)
     })
 
     mapRef.current = map
