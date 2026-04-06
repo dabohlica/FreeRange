@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Image from 'next/image'
 import MediaModal from '@/components/media/MediaModal'
-import { formatDate } from '@/lib/utils'
+import { formatDate, formatTime } from '@/lib/utils'
 
 interface Media {
   id: string
@@ -34,7 +34,7 @@ interface Entry {
   trip?: Trip | null
 }
 
-export default function EntryCard({ entry }: { entry: Entry }) {
+export default function EntryCard({ entry, showTime }: { entry: Entry; showTime?: boolean }) {
   const [modalIndex, setModalIndex] = useState<number | null>(null)
   const [expanded, setExpanded] = useState(false)
 
@@ -103,7 +103,12 @@ export default function EntryCard({ entry }: { entry: Entry }) {
                 {entry.title}
               </h3>
               <div className="flex items-center gap-3 mt-1">
-                <time className="text-xs text-[#a3a3a3]">{formatDate(entry.date)}</time>
+                <time className="text-xs text-[#a3a3a3]">
+                  {formatDate(entry.date)}
+                  {showTime && formatTime(entry.date) && (
+                    <span className="ml-2 text-[#c3c3c3]">{formatTime(entry.date)}</span>
+                  )}
+                </time>
                 {location && (
                   <span className="flex items-center gap-1 text-xs text-[#737373]">
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">

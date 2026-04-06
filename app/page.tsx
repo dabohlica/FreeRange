@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 
-// Root redirects to /map — middleware handles auth
+// Root redirects to /journey — middleware handles auth
 export default function RootPage() {
-  redirect('/map')
+  redirect('/journey')
 }

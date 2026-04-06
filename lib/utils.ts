@@ -13,6 +13,12 @@ export function formatDate(date: Date | string): string {
   })
 }
 
+export function formatTime(date: Date | string): string | null {
+  const d = new Date(date)
+  if (d.getHours() === 0 && d.getMinutes() === 0) return null
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+}
+
 export function formatDateShort(date: Date | string): string {
   return new Date(date).toLocaleDateString('en-US', {
     month: 'short',

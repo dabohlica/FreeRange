@@ -19,7 +19,7 @@ const JourneyCard = forwardRef<HTMLDivElement, JourneyCardProps>(
         isActive && 'ring-2 ring-[#171717] ring-offset-2'
       )}
     >
-      <EntryCard entry={entry} />
+      <EntryCard entry={entry} showTime />
     </div>
   )
 )
