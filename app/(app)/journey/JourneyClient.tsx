@@ -60,6 +60,7 @@ interface JourneyClientProps {
 export default function JourneyClient({ entries, liveLocation }: JourneyClientProps) {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
+  const [mapReady, setMapReady] = useState(false)
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null)
   const timelinePanelRef = useRef<HTMLDivElement>(null)
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -76,7 +77,24 @@ export default function JourneyClient({ entries, liveLocation }: JourneyClientPr
 
   const handleMapReady = useCallback((map: mapboxgl.Map) => {
     mapInstanceRef.current = map
+    setMapReady(true)
   }, [])
+
+  // Initial fly-to: zoom to the first GPS entry 5s after map loads
+  useEffect(() => {
+    if (!mapReady) return
+    const first = journeyEntries.find((e) => e.latitude && e.longitude)
+    if (!first) return
+    const timer = setTimeout(() => {
+      mapInstanceRef.current?.flyTo({
+        center: [first.longitude!, first.latitude!],
+        zoom: 10,
+        duration: 1800,
+      })
+      setActiveId(first.id)
+    }, 5000)
+    return () => clearTimeout(timer)
+  }, [mapReady, journeyEntries])
 
   const handleEntryClick = useCallback((entry: JourneyEntry) => {
     setActiveId(entry.id)
