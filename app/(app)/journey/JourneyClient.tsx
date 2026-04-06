@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback, useMemo } from 'react'
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import mapboxgl from 'mapbox-gl'
 import JourneyCard from '@/components/journey/JourneyCard'
@@ -85,6 +85,56 @@ export default function JourneyClient({ entries, liveLocation }: JourneyClientPr
       cardRefs.current.delete(id)
     }
   }, [])
+
+  // Scroll -> map sync via IntersectionObserver (D-10, D-11)
+  useEffect(() => {
+    const panel = timelinePanelRef.current
+    // Observer can be set up even if map isn't ready yet — the callback guards with ?.
+    if (!panel) return
+
+    const observer = new IntersectionObserver(
+      (ioEntries) => {
+        // Pick the entry with the highest intersection ratio (most visible card)
+        let bestEntry: IntersectionObserverEntry | null = null
+        for (const ioEntry of ioEntries) {
+          if (!ioEntry.isIntersecting) continue
+          if (!bestEntry || ioEntry.intersectionRatio > bestEntry.intersectionRatio) {
+            bestEntry = ioEntry
+          }
+        }
+        if (!bestEntry) return
+
+        const entryId = (bestEntry.target as HTMLElement).dataset.entryId
+        if (!entryId) return
+
+        const journeyEntry = journeyEntries.find((e) => e.id === entryId)
+        if (!journeyEntry) return
+
+        setActiveId(entryId)
+
+        // D-14: skip flyTo for GPS-less entries
+        if (!journeyEntry.latitude || !journeyEntry.longitude) return
+
+        // D-08: smooth flyTo, D-09: zoom 10
+        mapInstanceRef.current?.flyTo({
+          center: [journeyEntry.longitude, journeyEntry.latitude],
+          zoom: 10,
+          duration: 1200,
+        })
+      },
+      {
+        root: panel,       // CRITICAL: panel root, not document (Pitfall 1)
+        threshold: 0.5,    // D-10: fire at 50% visibility
+      }
+    )
+
+    // Observe all cards with data-entry-id
+    panel.querySelectorAll<HTMLElement>('[data-entry-id]').forEach((el) => {
+      observer.observe(el)
+    })
+
+    return () => observer.disconnect()
+  }, [journeyEntries])
 
   return (
     <main className="fixed inset-0 pt-16 bg-[#fafaf9]">
