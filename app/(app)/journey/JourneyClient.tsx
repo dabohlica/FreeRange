@@ -59,12 +59,20 @@ interface JourneyClientProps {
 
 export default function JourneyClient({ entries, liveLocation }: JourneyClientProps) {
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [activeIndex, setActiveIndex] = useState(0)
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null)
   const timelinePanelRef = useRef<HTMLDivElement>(null)
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const isProgrammaticScrollRef = useRef(false)
 
   const journeyEntries = useMemo(() => entries, [entries])
+
+  // Sync activeIndex when activeId changes (from IO or pin click)
+  useEffect(() => {
+    if (!activeId) return
+    const idx = journeyEntries.findIndex((e) => e.id === activeId)
+    if (idx !== -1) setActiveIndex(idx)
+  }, [activeId, journeyEntries])
 
   const handleMapReady = useCallback((map: mapboxgl.Map) => {
     mapInstanceRef.current = map
@@ -87,6 +95,66 @@ export default function JourneyClient({ entries, liveLocation }: JourneyClientPr
       }, 1000)
     }
   }, [])
+
+  const goNext = useCallback(() => {
+    setActiveIndex((i) => {
+      const next = Math.min(i + 1, journeyEntries.length - 1)
+      const entry = journeyEntries[next]
+      if (!entry) return i
+
+      setActiveId(entry.id)
+
+      // Fly map to entry (D-14: skip if no GPS)
+      if (entry.latitude && entry.longitude) {
+        mapInstanceRef.current?.flyTo({
+          center: [entry.longitude, entry.latitude],
+          zoom: 10,
+          duration: 1200,
+        })
+      }
+
+      // Scroll timeline to card
+      isProgrammaticScrollRef.current = true
+      cardRefs.current.get(entry.id)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+      setTimeout(() => {
+        isProgrammaticScrollRef.current = false
+      }, 1000)
+
+      return next
+    })
+  }, [journeyEntries])
+
+  const goPrev = useCallback(() => {
+    setActiveIndex((i) => {
+      const prev = Math.max(i - 1, 0)
+      const entry = journeyEntries[prev]
+      if (!entry) return i
+
+      setActiveId(entry.id)
+
+      if (entry.latitude && entry.longitude) {
+        mapInstanceRef.current?.flyTo({
+          center: [entry.longitude, entry.latitude],
+          zoom: 10,
+          duration: 1200,
+        })
+      }
+
+      isProgrammaticScrollRef.current = true
+      cardRefs.current.get(entry.id)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+      setTimeout(() => {
+        isProgrammaticScrollRef.current = false
+      }, 1000)
+
+      return prev
+    })
+  }, [journeyEntries])
 
   const setCardRef = useCallback((id: string, el: HTMLDivElement | null) => {
     if (el) {
@@ -154,13 +222,42 @@ export default function JourneyClient({ entries, liveLocation }: JourneyClientPr
       {/* Desktop: side-by-side. Mobile: stacked with mini-map */}
       <div className="h-full flex flex-col lg:flex-row">
         {/* Map panel — desktop: right 55%, mobile: 30vh sticky top */}
-        <div className="h-[30vh] lg:h-full lg:flex-1 lg:order-2 shrink-0">
+        <div className="relative h-[30vh] lg:h-full lg:flex-1 lg:order-2 shrink-0">
           <TravelMap
             entries={journeyEntries}
             liveLocation={liveLocation}
             onEntryClick={handleEntryClick}
             onMapReady={handleMapReady}
           />
+
+          {/* Mobile arrow navigation (D-07) — hidden on desktop */}
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 lg:hidden">
+            <button
+              onClick={goPrev}
+              disabled={activeIndex === 0}
+              className="w-9 h-9 rounded-full bg-white/90 backdrop-blur-sm shadow-md flex items-center justify-center disabled:opacity-30 transition-opacity cursor-pointer"
+              aria-label="Previous entry"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#171717" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
+
+            <span className="text-xs font-medium text-[#171717] bg-white/90 backdrop-blur-sm rounded-full px-3 py-1.5 shadow-md tabular-nums">
+              {activeIndex + 1} of {journeyEntries.length}
+            </span>
+
+            <button
+              onClick={goNext}
+              disabled={activeIndex === journeyEntries.length - 1}
+              className="w-9 h-9 rounded-full bg-white/90 backdrop-blur-sm shadow-md flex items-center justify-center disabled:opacity-30 transition-opacity cursor-pointer"
+              aria-label="Next entry"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#171717" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Timeline panel — desktop: left 45%, mobile: below mini-map */}
