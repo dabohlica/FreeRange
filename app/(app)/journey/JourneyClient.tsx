@@ -62,6 +62,7 @@ export default function JourneyClient({ entries, liveLocation }: JourneyClientPr
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null)
   const timelinePanelRef = useRef<HTMLDivElement>(null)
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const isProgrammaticScrollRef = useRef(false)
 
   const journeyEntries = useMemo(() => entries, [entries])
 
@@ -71,11 +72,20 @@ export default function JourneyClient({ entries, liveLocation }: JourneyClientPr
 
   const handleEntryClick = useCallback((entry: JourneyEntry) => {
     setActiveId(entry.id)
-    // scrollIntoView will be wired in Plan 05-03
-    cardRefs.current.get(entry.id)?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'center',
-    })
+    const cardEl = cardRefs.current.get(entry.id)
+    if (cardEl) {
+      isProgrammaticScrollRef.current = true
+      cardEl.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      })
+      // Clear the flag after scroll settles — setTimeout(0) lets the current
+      // microtask queue (including any IO callbacks) drain first, but we use
+      // a longer delay to account for the smooth scroll animation duration
+      setTimeout(() => {
+        isProgrammaticScrollRef.current = false
+      }, 1000)
+    }
   }, [])
 
   const setCardRef = useCallback((id: string, el: HTMLDivElement | null) => {
@@ -94,6 +104,9 @@ export default function JourneyClient({ entries, liveLocation }: JourneyClientPr
 
     const observer = new IntersectionObserver(
       (ioEntries) => {
+        // Guard: skip IO events triggered by programmatic scrollIntoView (Pitfall 4)
+        if (isProgrammaticScrollRef.current) return
+
         // Pick the entry with the highest intersection ratio (most visible card)
         let bestEntry: IntersectionObserverEntry | null = null
         for (const ioEntry of ioEntries) {
