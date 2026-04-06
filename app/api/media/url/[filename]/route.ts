@@ -36,15 +36,12 @@ export async function GET(
     return NextResponse.json({ error: 'File not found' }, { status: 404 })
   }
 
-  // Proxy the image bytes — redirect causes CORS failures for fetch() with credentials
-  const imageRes = await fetch(data.signedUrl)
-  if (!imageRes.ok) {
-    return NextResponse.json({ error: 'File not found' }, { status: 404 })
-  }
-  const buffer = await imageRes.arrayBuffer()
-  return new NextResponse(buffer, {
+  // Redirect to Supabase signed URL — image bytes flow Supabase→browser directly,
+  // never through Vercel. Safe for <img src> and <video src>; avoids origin transfer cost.
+  // Browser caches the redirect itself for 1 hour (matching the signed URL expiry).
+  return NextResponse.redirect(data.signedUrl, {
+    status: 302,
     headers: {
-      'Content-Type': imageRes.headers.get('Content-Type') ?? 'image/jpeg',
       'Cache-Control': 'private, max-age=3600',
     },
   })
