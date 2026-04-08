@@ -7,6 +7,7 @@ import MediaModal from './MediaModal'
 interface MediaItem {
   id: string
   url: string
+  thumbnailUrl?: string | null
   type: string
   filename: string
   width?: number
@@ -36,7 +37,7 @@ export default function MediaGrid({ media }: { media: MediaItem[] }) {
               </div>
             ) : (
               <Image
-                src={item.url}
+                src={item.thumbnailUrl ?? item.url}
                 alt={item.filename}
                 fill
                 sizes="(max-width: 640px) 50vw, 33vw"

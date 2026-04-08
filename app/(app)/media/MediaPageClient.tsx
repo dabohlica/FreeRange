@@ -12,6 +12,7 @@ type ViewMode = 'grid' | 'map'
 interface MediaItem {
   id: string
   url: string
+  thumbnailUrl?: string | null
   type: string
   filename: string
   width?: number | null
@@ -139,7 +140,7 @@ export default function MediaPageClient({
                   </div>
                 ) : (
                   <Image
-                    src={item.url}
+                    src={item.thumbnailUrl ?? item.url}
                     alt={item.filename}
                     fill
                     sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 20vw"

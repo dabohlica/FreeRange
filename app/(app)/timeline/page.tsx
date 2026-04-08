@@ -27,6 +27,7 @@ export default async function TimelinePage() {
     media: e.media.map((m) => ({
       id: m.id,
       url: m.url,
+      thumbnailUrl: m.thumbnailUrl ?? null,
       type: m.type as string,
       filename: m.filename,
       width: m.width,
