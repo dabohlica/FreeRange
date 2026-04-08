@@ -326,6 +326,46 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
   const [tripForm, setTripForm]           = useState({ name: '', description: '', color: '#3B82F6' })
   const [tripSubmitting, setTripSubmitting] = useState(false)
 
+  // ── Backfill thumbnails ──────────────────────────────────────────────────
+  const [backfillRunning, setBackfillRunning] = useState(false)
+  const [backfillStatus, setBackfillStatus] = useState<{
+    processed: number
+    failed: number
+    remaining: number | null
+  }>({ processed: 0, failed: 0, remaining: null })
+
+  // ── Backfill handler ─────────────────────────────────────────────────────
+  const runBackfill = async () => {
+    setBackfillRunning(true)
+    setBackfillStatus({ processed: 0, failed: 0, remaining: null })
+    let totalProcessed = 0
+    let totalFailed = 0
+    try {
+      while (true) {
+        const res = await fetch('/api/admin/backfill-thumbnails', { method: 'POST' })
+        if (!res.ok) throw new Error(`backfill failed: ${res.status}`)
+        const json = (await res.json()) as {
+          processed: number
+          failed: number
+          remaining: number
+          errors: string[]
+        }
+        totalProcessed += json.processed
+        totalFailed += json.failed
+        setBackfillStatus({
+          processed: totalProcessed,
+          failed: totalFailed,
+          remaining: json.remaining,
+        })
+        if (json.remaining === 0 || json.processed === 0) break
+      }
+    } catch (err) {
+      console.error('[admin] backfill error', err)
+    } finally {
+      setBackfillRunning(false)
+    }
+  }
+
   // ── Single entry dropzone ────────────────────────────────────────────────
   const onDrop = useCallback(async (accepted: File[]) => {
     setUploadFiles(prev => [...prev, ...accepted])
@@ -627,6 +667,22 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         {/* ── Entries ── */}
         {tab === 'entries' && (
           <div className="space-y-3">
+            <div className="my-4 p-4 border rounded">
+              <button
+                type="button"
+                onClick={runBackfill}
+                disabled={backfillRunning}
+                className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
+              >
+                {backfillRunning ? 'Generating thumbnails...' : 'Generate thumbnails for existing media'}
+              </button>
+              {(backfillRunning || backfillStatus.remaining !== null) && (
+                <p className="mt-2 text-sm">
+                  Processed: {backfillStatus.processed} · Failed: {backfillStatus.failed}
+                  {backfillStatus.remaining !== null && ` · Remaining: ${backfillStatus.remaining}`}
+                </p>
+              )}
+            </div>
             {entries.length === 0 && <div className="text-center py-16 text-[#a3a3a3]">No entries yet. Create your first entry!</div>}
 
             {entries.length > 0 && (
