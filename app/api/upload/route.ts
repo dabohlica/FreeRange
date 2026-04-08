@@ -5,6 +5,7 @@ import { getSession } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { extractExif } from '@/lib/exif'
 import { saveUploadedFile, getMediaType, MAX_FILE_SIZE } from '@/lib/upload'
+import { generateThumbnailAndBlurhash } from '@/lib/thumbnail'
 import { reverseGeocode } from '@/lib/gps'
 
 export const maxDuration = 60
@@ -70,6 +71,16 @@ export async function POST(req: NextRequest) {
     const { filename, url } = await saveUploadedFile(buffer, file.name)
     const exif = await extractExif(buffer)
 
+    let thumbUrl: string | null = null
+    let blurhash: string | null = null
+    try {
+      const result = await generateThumbnailAndBlurhash(buffer, filename)
+      thumbUrl = result.thumbUrl
+      blurhash = result.blurhash
+    } catch (err) {
+      console.error('[upload] thumbnail gen failed', err)
+    }
+
     const media = await prisma.media.create({
       data: {
         filename, url,
@@ -83,6 +94,8 @@ export async function POST(req: NextRequest) {
         takenAt:   exif.takenAt,
         hash,
         entryId,
+        thumbnailUrl: thumbUrl,
+        blurhash,
       },
     })
 

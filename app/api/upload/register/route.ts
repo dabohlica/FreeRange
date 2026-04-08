@@ -4,6 +4,7 @@ import { getSession } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { extractExif } from '@/lib/exif'
 import { getMediaType } from '@/lib/upload'
+import { generateThumbnailAndBlurhash } from '@/lib/thumbnail'
 import { reverseGeocode } from '@/lib/gps'
 
 export async function POST(req: NextRequest) {
@@ -46,6 +47,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ skipped: true, media: existing })
   }
 
+  let thumbnailUrl: string | null = null
+  let blurhash: string | null = null
+  try {
+    const result = await generateThumbnailAndBlurhash(buffer, storedFilename)
+    thumbnailUrl = result.thumbUrl
+    blurhash = result.blurhash
+  } catch (err) {
+    console.error('[upload/register] thumbnail gen failed', err)
+  }
+
   const exif = await extractExif(buffer)
   const url = `/api/media/url/${storedFilename}`
 
@@ -63,6 +74,8 @@ export async function POST(req: NextRequest) {
       takenAt:   exif.takenAt,
       hash,
       entryId,
+      thumbnailUrl,
+      blurhash,
     },
   })
 
