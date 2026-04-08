@@ -8,6 +8,7 @@ import { formatDate, formatTime } from '@/lib/utils'
 interface Media {
   id: string
   url: string
+  thumbnailUrl?: string | null
   type: string
   filename: string
   width?: number | null
@@ -58,7 +59,7 @@ export default function EntryCard({ entry, showTime }: { entry: Entry; showTime?
             >
               <div className="relative aspect-[16/9] bg-[#f5f5f4] overflow-hidden">
                 <Image
-                  src={images[0].url}
+                  src={images[0].thumbnailUrl ?? images[0].url}
                   alt={images[0].filename}
                   fill
                   sizes="(max-width: 768px) 100vw, 600px"
@@ -148,11 +149,12 @@ export default function EntryCard({ entry, showTime }: { entry: Entry; showTime?
                   className="relative w-14 h-14 shrink-0 rounded-lg overflow-hidden bg-[#f5f5f4] cursor-pointer"
                 >
                   <Image
-                    src={img.url}
+                    src={img.thumbnailUrl ?? img.url}
                     alt={img.filename}
                     fill
                     sizes="56px"
                     className="object-cover"
+                    loading="lazy"
                   />
                   {i === 3 && images.length > 5 && (
                     <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-white text-xs font-medium">
