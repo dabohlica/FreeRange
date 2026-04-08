@@ -4,6 +4,7 @@ import { useState } from 'react'
 import dynamic from 'next/dynamic'
 import Image from 'next/image'
 import MediaModal from '@/components/media/MediaModal'
+import { blurhashToDataURL } from '@/lib/blurhash-to-data-url'
 
 const TravelMap = dynamic(() => import('@/components/map/TravelMap'), { ssr: false })
 
@@ -13,6 +14,7 @@ interface MediaItem {
   id: string
   url: string
   thumbnailUrl?: string | null
+  blurhash?: string | null
   type: string
   filename: string
   width?: number | null
@@ -146,6 +148,8 @@ export default function MediaPageClient({
                     sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 20vw"
                     className="object-cover transition-transform duration-300 group-hover:scale-105"
                     loading="lazy"
+                    placeholder={item.blurhash ? 'blur' : 'empty'}
+                    blurDataURL={item.blurhash ? blurhashToDataURL(item.blurhash) : undefined}
                   />
                 )}
                 {item.latitude && (

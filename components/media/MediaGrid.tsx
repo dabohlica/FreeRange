@@ -3,11 +3,13 @@
 import { useState } from 'react'
 import Image from 'next/image'
 import MediaModal from './MediaModal'
+import { blurhashToDataURL } from '@/lib/blurhash-to-data-url'
 
 interface MediaItem {
   id: string
   url: string
   thumbnailUrl?: string | null
+  blurhash?: string | null
   type: string
   filename: string
   width?: number
@@ -43,6 +45,8 @@ export default function MediaGrid({ media }: { media: MediaItem[] }) {
                 sizes="(max-width: 640px) 50vw, 33vw"
                 className="object-cover transition-transform duration-300 group-hover:scale-105"
                 loading="lazy"
+                placeholder={item.blurhash ? 'blur' : 'empty'}
+                blurDataURL={item.blurhash ? blurhashToDataURL(item.blurhash) : undefined}
               />
             )}
           </button>

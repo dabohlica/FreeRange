@@ -4,11 +4,13 @@ import { useState } from 'react'
 import Image from 'next/image'
 import MediaModal from '@/components/media/MediaModal'
 import { formatDate, formatTime } from '@/lib/utils'
+import { blurhashToDataURL } from '@/lib/blurhash-to-data-url'
 
 interface Media {
   id: string
   url: string
   thumbnailUrl?: string | null
+  blurhash?: string | null
   type: string
   filename: string
   width?: number | null
@@ -65,6 +67,8 @@ export default function EntryCard({ entry, showTime }: { entry: Entry; showTime?
                   sizes="(max-width: 768px) 100vw, 600px"
                   className="object-cover hover:scale-105 transition-transform duration-500"
                   loading="lazy"
+                  placeholder={images[0].blurhash ? 'blur' : 'empty'}
+                  blurDataURL={images[0].blurhash ? blurhashToDataURL(images[0].blurhash) : undefined}
                 />
                 {entry.media.length > 1 && (
                   <div className="absolute bottom-2 right-2 px-2 py-1 rounded-lg bg-black/50 text-white text-xs font-medium backdrop-blur-sm">
@@ -155,6 +159,8 @@ export default function EntryCard({ entry, showTime }: { entry: Entry; showTime?
                     sizes="56px"
                     className="object-cover"
                     loading="lazy"
+                    placeholder={img.blurhash ? 'blur' : 'empty'}
+                    blurDataURL={img.blurhash ? blurhashToDataURL(img.blurhash) : undefined}
                   />
                   {i === 3 && images.length > 5 && (
                     <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-white text-xs font-medium">

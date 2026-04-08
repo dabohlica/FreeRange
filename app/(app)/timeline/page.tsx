@@ -28,6 +28,7 @@ export default async function TimelinePage() {
       id: m.id,
       url: m.url,
       thumbnailUrl: m.thumbnailUrl ?? null,
+      blurhash: m.blurhash ?? null,
       type: m.type as string,
       filename: m.filename,
       width: m.width,
