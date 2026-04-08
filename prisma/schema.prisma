@@ -58,8 +58,10 @@ model Media {
   longitude Float?
   altitude  Float?
   takenAt   DateTime?
-  hash      String?   @unique
-  createdAt DateTime  @default(now())
+  hash         String?   @unique
+  thumbnailUrl String?
+  blurhash     String?
+  createdAt    DateTime  @default(now())
 
   entryId String
   entry   Entry  @relation(fields: [entryId], references: [id], onDelete: Cascade)
