@@ -32,6 +32,7 @@ model Entry {
   altitude    Float?
   city        String?
   country     String?
+  weather     Json?
   tripId      String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
