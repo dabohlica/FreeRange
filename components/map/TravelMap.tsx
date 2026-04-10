@@ -12,7 +12,7 @@ interface Entry {
   longitude: number | null
   city?: string | null
   country?: string | null
-  media: Array<{ id: string; url: string; type: string; filename: string }>
+  media: Array<{ id: string; url: string; thumbnailUrl?: string | null; type: string; filename: string }>
 }
 
 interface LiveLocation {
@@ -66,8 +66,13 @@ async function buildPinSprite(imgUrl: string | null): Promise<HTMLImageElement> 
 
   if (imgUrl) {
     try {
-      // Fetch through our auth proxy so the session cookie is sent
-      const res  = await fetch(imgUrl, { credentials: 'include' })
+      // Fetch through our auth proxy (same-origin, sends session cookie).
+      // Do NOT use credentials:'include' — after the proxy's 302 redirect to the
+      // Supabase CDN (cross-origin), browsers require ACAO:* AND ACAC:true for
+      // include mode; Supabase only sends ACAO:* so the fetch fails silently.
+      // credentials:'same-origin' (default) sends cookies to the proxy but not
+      // to the cross-origin redirect target, which is exactly what we want.
+      const res  = await fetch(imgUrl)
       const blob = await res.blob()
       const blobUrl = URL.createObjectURL(blob)
       await new Promise<void>((resolve, reject) => {
@@ -178,8 +183,11 @@ export default function TravelMap({ entries, liveLocation, onEntryClick, onMapRe
       if (map.hasImage(entry.id)) continue
       const firstImg = entry.media.find(m => m.type === 'IMAGE')
       if (!firstImg) continue  // no photo — stays on SPRITE_DEFAULT
+      // Prefer thumbnail (smaller, faster) — fall back to full URL for entries
+      // that pre-date Phase 3 thumbnail backfill
+      const pinUrl = firstImg.thumbnailUrl ?? firstImg.url
 
-      buildPinSprite(firstImg.url).then(img => {
+      buildPinSprite(pinUrl).then(img => {
         if (map.hasImage(entry.id)) return  // race guard
         map.addImage(entry.id, img)
         // Update GeoJSON to point this feature at its new sprite
