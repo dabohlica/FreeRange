@@ -9,7 +9,8 @@ const EXIF_TO_DEGREES: Record<number, number> = { 1: 0, 3: 180, 6: 90, 8: 270 }
 
 async function getRotationDegrees(buffer: Buffer): Promise<number> {
   try {
-    const meta = await exifr.parse(buffer, ['Orientation'])
+    // translateValues: false keeps Orientation as a raw integer (e.g. 6), not a string ("Rotate 90 CW")
+    const meta = await exifr.parse(buffer, { pick: ['Orientation'], translateValues: false })
     return EXIF_TO_DEGREES[meta?.Orientation ?? 1] ?? 0
   } catch {
     return 0
