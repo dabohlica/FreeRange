@@ -335,12 +335,17 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
   }>({ processed: 0, failed: 0, remaining: null })
 
   // ── Backfill handler ─────────────────────────────────────────────────────
-  const runBackfill = async () => {
+  const runBackfill = async (reset = false) => {
     setBackfillRunning(true)
     setBackfillStatus({ processed: 0, failed: 0, remaining: null })
     let totalProcessed = 0
     let totalFailed = 0
     try {
+      if (reset) {
+        // Clear all existing thumbnails first so they get re-generated
+        const res = await fetch('/api/admin/backfill-thumbnails?reset=true', { method: 'POST' })
+        if (!res.ok) throw new Error(`reset failed: ${res.status}`)
+      }
       while (true) {
         const res = await fetch('/api/admin/backfill-thumbnails', { method: 'POST' })
         if (!res.ok) throw new Error(`backfill failed: ${res.status}`)
@@ -668,14 +673,24 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
         {tab === 'entries' && (
           <div className="space-y-3">
             <div className="my-4 p-4 border rounded">
-              <button
-                type="button"
-                onClick={runBackfill}
-                disabled={backfillRunning}
-                className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
-              >
-                {backfillRunning ? 'Generating thumbnails...' : 'Generate thumbnails for existing media'}
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => runBackfill(false)}
+                  disabled={backfillRunning}
+                  className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
+                >
+                  {backfillRunning ? 'Generating...' : 'Generate missing thumbnails'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => runBackfill(true)}
+                  disabled={backfillRunning}
+                  className="px-4 py-2 bg-orange-600 text-white rounded disabled:opacity-50"
+                >
+                  Regenerate all thumbnails
+                </button>
+              </div>
               {(backfillRunning || backfillStatus.remaining !== null) && (
                 <p className="mt-2 text-sm">
                   Processed: {backfillStatus.processed} · Failed: {backfillStatus.failed}

@@ -9,10 +9,24 @@ export const runtime = 'nodejs'
 
 const BATCH_SIZE = 10
 
-export async function POST() {
+export async function POST(req: Request) {
   const session = await getSession()
   if (session?.role !== 'admin') {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+  }
+
+  const { searchParams } = new URL(req.url)
+  const reset = searchParams.get('reset') === 'true'
+
+  // ?reset=true clears all existing thumbnails so they get re-generated on the
+  // next backfill passes — use this after fixing thumbnail generation bugs.
+  if (reset) {
+    await prisma.media.updateMany({
+      where: { type: 'IMAGE' },
+      data: { thumbnailUrl: null, blurhash: null },
+    })
+    const total = await prisma.media.count({ where: { type: 'IMAGE' } })
+    return NextResponse.json({ reset: true, queued: total })
   }
 
   const remainingBefore = await prisma.media.count({

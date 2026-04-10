@@ -40,7 +40,7 @@ export async function generateThumbnailAndBlurhash(
   )
   const { error } = await supabase.storage
     .from('media')
-    .upload(thumbFilename, thumbBuffer, { contentType: 'image/jpeg', upsert: false })
+    .upload(thumbFilename, thumbBuffer, { contentType: 'image/jpeg', upsert: true })
   if (error) throw new Error(`Thumb upload failed: ${error.message}`)
 
   return {
