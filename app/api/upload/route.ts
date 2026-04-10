@@ -7,6 +7,7 @@ import { extractExif } from '@/lib/exif'
 import { saveUploadedFile, getMediaType, MAX_FILE_SIZE } from '@/lib/upload'
 import { generateThumbnailAndBlurhash } from '@/lib/thumbnail'
 import { reverseGeocode } from '@/lib/gps'
+import { fetchWeather } from '@/lib/weather'
 
 export const maxDuration = 60
 
@@ -111,6 +112,20 @@ export async function POST(req: NextRequest) {
             ...(geo.city    && { city:    geo.city }),
             ...(geo.country && { country: geo.country }),
           },
+        }).catch(() => {})
+      }).catch(() => {})
+    }
+
+    // Fetch weather in background if entry has GPS + date and no weather yet
+    const wLat = entry.latitude ?? exif.latitude
+    const wLng = entry.longitude ?? exif.longitude
+    if (!entry.weather && wLat != null && wLng != null && entry.date) {
+      const dateStr = new Date(entry.date).toISOString().slice(0, 10)
+      fetchWeather(wLat, wLng, dateStr).then(weather => {
+        if (!weather) return
+        prisma.entry.update({
+          where: { id: entryId },
+          data: { weather },
         }).catch(() => {})
       }).catch(() => {})
     }
