@@ -13,13 +13,18 @@ export async function generateThumbnailAndBlurhash(
   originalFilename: string,
 ): Promise<ThumbnailResult> {
   // 1. 400px JPEG thumbnail
+  // .rotate() with no args applies EXIF orientation and strips the tag so the
+  // pixels are already correctly oriented — without this portrait shots appear
+  // rotated 90° because sharp ignores EXIF orientation by default.
   const thumbBuffer = await sharp(buffer)
+    .rotate()
     .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
     .jpeg({ quality: 75 })
     .toBuffer()
 
-  // 2. blurhash from 32x32 raw RGBA
+  // 2. blurhash from 32x32 raw RGBA — same rotation fix applies
   const { data, info } = await sharp(buffer)
+    .rotate()
     .resize(32, 32, { fit: 'inside' })
     .ensureAlpha()
     .raw()
