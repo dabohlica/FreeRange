@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
 
-// Cache signed URLs for internal proxying — reduces createSignedUrl API calls
-// for concurrent requests on the same warm Vercel instance.
-const urlCache = new Map<string, { signedUrl: string; expiresAt: number }>()
-const CACHE_TTL_MS = 50 * 60 * 1000
+// Separate caches for images and videos — different signed URL TTLs.
+// Images are proxied (signed URL used server-side only, short TTL is fine).
+// Videos are redirected; browser caches the redirect, so the signed URL must
+// stay stable for as long as the browser keeps the redirect cached.
+const imageUrlCache = new Map<string, { signedUrl: string; expiresAt: number }>()
+const videoUrlCache = new Map<string, { signedUrl: string; expiresAt: number }>()
+
+const IMAGE_SIGNED_TTL_S  = 3600              // 1 h — only used server-side
+const IMAGE_CACHE_TTL_MS  = 50 * 60 * 1000   // 50 min
+
+const VIDEO_SIGNED_TTL_S  = 7 * 24 * 3600    // 7 days — browser keeps redirect this long
+const VIDEO_CACHE_TTL_MS  = 6.5 * 24 * 60 * 60 * 1000  // 6.5 days
 
 const VIDEO_EXT = /\.(mp4|mov|webm|avi|m4v)$/i
 
@@ -27,9 +35,14 @@ export async function GET(
     return NextResponse.json({ error: 'Storage not configured' }, { status: 500 })
   }
 
-  // Get or generate a signed URL (used server-side only for proxying)
+  const isVideo = VIDEO_EXT.test(filename)
+  const cache      = isVideo ? videoUrlCache  : imageUrlCache
+  const signedTtl  = isVideo ? VIDEO_SIGNED_TTL_S : IMAGE_SIGNED_TTL_S
+  const cacheTtl   = isVideo ? VIDEO_CACHE_TTL_MS : IMAGE_CACHE_TTL_MS
+
+  // Get or generate a signed URL
   let signedUrl: string
-  const cached = urlCache.get(filename)
+  const cached = cache.get(filename)
   if (cached && cached.expiresAt > Date.now()) {
     signedUrl = cached.signedUrl
   } else {
@@ -40,22 +53,23 @@ export async function GET(
     )
     const { data, error } = await supabase.storage
       .from('media')
-      .createSignedUrl(filename, 3600)
+      .createSignedUrl(filename, signedTtl)
 
     if (error || !data?.signedUrl) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 })
     }
 
     signedUrl = data.signedUrl
-    urlCache.set(filename, { signedUrl, expiresAt: Date.now() + CACHE_TTL_MS })
+    cache.set(filename, { signedUrl, expiresAt: Date.now() + cacheTtl })
   }
 
   // Videos: redirect so the browser can send Range requests for seeking.
-  // Short cache is fine — video files don't change after upload.
-  if (VIDEO_EXT.test(filename)) {
+  // 7-day signed URL + matching Cache-Control keeps the browser pointing at the same
+  // token for a week — no re-download until the token actually expires.
+  if (isVideo) {
     return NextResponse.redirect(signedUrl, {
       status: 302,
-      headers: { 'Cache-Control': 'private, max-age=3000' },
+      headers: { 'Cache-Control': 'private, max-age=604800' },
     })
   }
 
