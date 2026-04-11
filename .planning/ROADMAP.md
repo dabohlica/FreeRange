@@ -50,7 +50,7 @@ Plans:
 ### Phase 5: Journey View — Synchronized Timeline + Map (P1)
 **Goal**: New `/journey` page where scrolling the timeline flies the map to each entry's pin — bidirectional sync. Visitors can follow the trip narrative without any extra effort.
 
-**Plans:** 3/4 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 05-01-PLAN.md — Page scaffold + data layer: onMapReady prop on TravelMap, JourneyCard wrapper, SSR page + JourneyClient shell
