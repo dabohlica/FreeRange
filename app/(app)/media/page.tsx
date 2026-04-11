@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma'
 import MediaPageClient from './MediaPageClient'
 
-export const dynamic = 'force-dynamic'
+export const revalidate = 30
 
 export default async function MediaPage() {
   const [allMedia, gpsMedia, entries] = await Promise.all([

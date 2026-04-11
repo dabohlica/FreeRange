@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma'
 import EntryCard from '@/components/entries/EntryCard'
 
-export const dynamic = 'force-dynamic'
+export const revalidate = 30
 
 export default async function TimelinePage() {
   const entries = await prisma.entry.findMany({
