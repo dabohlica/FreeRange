@@ -6,6 +6,7 @@ import { extractExif } from '@/lib/exif'
 import { getMediaType } from '@/lib/upload'
 import { generateThumbnailAndBlurhash } from '@/lib/thumbnail'
 import { reverseGeocode } from '@/lib/gps'
+import { downloadFile, deleteFile } from '@/lib/storage'
 
 export async function POST(req: NextRequest) {
   const session = await getSession()
@@ -21,29 +22,19 @@ export async function POST(req: NextRequest) {
   const entry = await prisma.entry.findUnique({ where: { id: entryId } })
   if (!entry) return NextResponse.json({ error: 'Entry not found' }, { status: 404 })
 
-  // Download the file from Supabase to extract EXIF and compute hash
-  const { createClient } = await import('@supabase/supabase-js')
-  const supabase = createClient(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  )
-
-  const { data: fileData, error: downloadError } = await supabase.storage
-    .from('media')
-    .download(storedFilename)
-
-  if (downloadError || !fileData) {
-    return NextResponse.json({ error: `Failed to read uploaded file: ${downloadError?.message}` }, { status: 500 })
+  let buffer: Buffer
+  try {
+    const result = await downloadFile(storedFilename)
+    buffer = result.buffer
+  } catch (err) {
+    return NextResponse.json({ error: `Failed to read uploaded file: ${String(err)}` }, { status: 500 })
   }
 
-  const buffer = Buffer.from(await fileData.arrayBuffer())
   const hash = createHash('sha256').update(buffer).digest('hex')
 
-  // Check for duplicate
   const existing = await prisma.media.findUnique({ where: { hash } })
   if (existing) {
-    // Remove the just-uploaded duplicate from storage
-    await supabase.storage.from('media').remove([storedFilename])
+    await deleteFile(storedFilename).catch(() => {})
     return NextResponse.json({ skipped: true, media: existing })
   }
 
@@ -79,7 +70,6 @@ export async function POST(req: NextRequest) {
     },
   })
 
-  // Reverse-geocode in background if entry has no location yet
   if (!entry.latitude && exif.latitude && exif.longitude) {
     reverseGeocode(exif.latitude, exif.longitude).then(geo => {
       prisma.entry.update({

@@ -1,7 +1,7 @@
 import sharp from 'sharp'
 import { encode } from 'blurhash'
-import { createClient } from '@supabase/supabase-js'
 import exifr from 'exifr'
+import { uploadFile } from '@/lib/storage'
 
 // EXIF orientation → clockwise degrees sharp should rotate.
 // Values not in this map (2,4,5,7 — mirrored) are rare for phone photos; treat as 0.
@@ -50,14 +50,7 @@ export async function generateThumbnailAndBlurhash(
   // 3. Upload to Supabase flat bucket with `thumb_` prefix
   // (underscore — bucket is flat, slash would fail auth proxy validation)
   const thumbFilename = `thumb_${originalFilename.replace(/\.[^.]+$/, '.jpg')}`
-  const supabase = createClient(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  )
-  const { error } = await supabase.storage
-    .from('media')
-    .upload(thumbFilename, thumbBuffer, { contentType: 'image/jpeg', upsert: true })
-  if (error) throw new Error(`Thumb upload failed: ${error.message}`)
+  await uploadFile(thumbBuffer, thumbFilename, 'image/jpeg')
 
   return {
     thumbFilename,

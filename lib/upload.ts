@@ -1,5 +1,6 @@
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
+import { isR2, uploadFile, deleteFile } from '@/lib/storage'
 
 export function getMediaType(filename: string): 'IMAGE' | 'VIDEO' {
   const ext = path.extname(filename).toLowerCase()
@@ -32,8 +33,9 @@ export async function saveUploadedFile(
   const ext = path.extname(originalName).toLowerCase()
   const filename = `${uuidv4()}${ext}`
 
-  if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    return saveToSupabase(buffer, filename, originalName)
+  if (isR2() || (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)) {
+    await uploadFile(buffer, filename, getContentType(originalName))
+    return { filename, url: `/api/media/url/${filename}` }
   }
 
   return saveToLocal(buffer, filename)
@@ -89,13 +91,8 @@ function getContentType(filename: string): string {
  * Deletes a file from either Supabase Storage or local disk.
  */
 export async function deleteUploadedFile(url: string, filename: string): Promise<void> {
-  if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    const { createClient } = await import('@supabase/supabase-js')
-    const supabase = createClient(
-      process.env.SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
-    await supabase.storage.from('media').remove([filename])
+  if (isR2() || (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)) {
+    await deleteFile(filename)
     return
   }
 

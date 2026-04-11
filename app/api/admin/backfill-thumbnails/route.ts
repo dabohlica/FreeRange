@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
 import { getSession } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { generateThumbnailAndBlurhash } from '@/lib/thumbnail'
+import { downloadFile } from '@/lib/storage'
 
 export const maxDuration = 60
 export const runtime = 'nodejs'
@@ -39,20 +39,13 @@ export async function POST(req: Request) {
     orderBy: { createdAt: 'asc' },
   })
 
-  const supabase = createClient(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  )
-
   let processed = 0
   let failed = 0
   const errors: string[] = []
 
   for (const media of batch) {
     try {
-      const { data, error } = await supabase.storage.from('media').download(media.filename)
-      if (error || !data) throw new Error(error?.message ?? 'download failed')
-      const buffer = Buffer.from(await data.arrayBuffer())
+      const { buffer } = await downloadFile(media.filename)
       const { thumbUrl, blurhash } = await generateThumbnailAndBlurhash(buffer, media.filename)
       await prisma.media.update({
         where: { id: media.id },

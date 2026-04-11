@@ -1,18 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
+import { isR2, getR2PublicUrl, downloadFile, createDownloadUrl } from '@/lib/storage'
 
-// Separate caches for images and videos — different signed URL TTLs.
-// Images are proxied (signed URL used server-side only, short TTL is fine).
-// Videos are redirected; browser caches the redirect, so the signed URL must
-// stay stable for as long as the browser keeps the redirect cached.
-const imageUrlCache = new Map<string, { signedUrl: string; expiresAt: number }>()
-const videoUrlCache = new Map<string, { signedUrl: string; expiresAt: number }>()
-
-const IMAGE_SIGNED_TTL_S  = 3600              // 1 h — only used server-side
-const IMAGE_CACHE_TTL_MS  = 50 * 60 * 1000   // 50 min
-
-const VIDEO_SIGNED_TTL_S  = 7 * 24 * 3600    // 7 days — browser keeps redirect this long
-const VIDEO_CACHE_TTL_MS  = 6.5 * 24 * 60 * 60 * 1000  // 6.5 days
+// Cache signed/presigned download URLs for video redirects.
+// Reset on cold start — fine for Vercel warm instances.
+const videoUrlCache = new Map<string, { url: string; expiresAt: number }>()
+const VIDEO_TTL_S   = 7 * 24 * 3600               // 7 days
+const VIDEO_TTL_MS  = (VIDEO_TTL_S - 3600) * 1000 // cache until 1h before expiry
 
 const VIDEO_EXT = /\.(mp4|mov|webm|avi|m4v)$/i
 
@@ -31,66 +25,62 @@ export async function GET(
     return NextResponse.json({ error: 'Invalid filename' }, { status: 400 })
   }
 
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    return NextResponse.json({ error: 'Storage not configured' }, { status: 500 })
+  // ── R2 with public CDN domain ──────────────────────────────────────────
+  // Best case: redirect straight to the CDN URL — bytes never touch Vercel.
+  // Works for both images (proxied below otherwise) and videos (Range requests
+  // are handled natively by the CDN). URL is permanent so cache for 1 year.
+  const r2Public = getR2PublicUrl()
+  if (isR2() && r2Public) {
+    return NextResponse.redirect(`${r2Public}/${filename}`, {
+      status: 302,
+      headers: { 'Cache-Control': 'private, max-age=31536000' },
+    })
   }
 
   const isVideo = VIDEO_EXT.test(filename)
-  const cache      = isVideo ? videoUrlCache  : imageUrlCache
-  const signedTtl  = isVideo ? VIDEO_SIGNED_TTL_S : IMAGE_SIGNED_TTL_S
-  const cacheTtl   = isVideo ? VIDEO_CACHE_TTL_MS : IMAGE_CACHE_TTL_MS
 
-  // Get or generate a signed URL
-  let signedUrl: string
-  const cached = cache.get(filename)
-  if (cached && cached.expiresAt > Date.now()) {
-    signedUrl = cached.signedUrl
-  } else {
-    const { createClient } = await import('@supabase/supabase-js')
-    const supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
-    )
-    const { data, error } = await supabase.storage
-      .from('media')
-      .createSignedUrl(filename, signedTtl)
-
-    if (error || !data?.signedUrl) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 })
-    }
-
-    signedUrl = data.signedUrl
-    cache.set(filename, { signedUrl, expiresAt: Date.now() + cacheTtl })
-  }
-
-  // Videos: redirect so the browser can send Range requests for seeking.
-  // 7-day signed URL + matching Cache-Control keeps the browser pointing at the same
-  // token for a week — no re-download until the token actually expires.
+  // ── Videos (R2 private or Supabase) ───────────────────────────────────
+  // Redirect to a presigned/signed URL so the browser can send Range requests
+  // for seeking. Use a 7-day TTL so the browser redirect cache stays valid for
+  // a week — one download per video per user per week.
   if (isVideo) {
-    return NextResponse.redirect(signedUrl, {
+    const cached = videoUrlCache.get(filename)
+    let videoUrl: string
+    if (cached && cached.expiresAt > Date.now()) {
+      videoUrl = cached.url
+    } else {
+      try {
+        videoUrl = await createDownloadUrl(filename, VIDEO_TTL_S)
+      } catch {
+        return NextResponse.json({ error: 'File not found' }, { status: 404 })
+      }
+      videoUrlCache.set(filename, { url: videoUrl, expiresAt: Date.now() + VIDEO_TTL_MS })
+    }
+    return NextResponse.redirect(videoUrl, {
       status: 302,
       headers: { 'Cache-Control': 'private, max-age=604800' },
     })
   }
 
-  // Images: proxy bytes so the browser caches at the stable /api/media/url/{filename} URL.
-  //
-  // Redirecting to a signed URL is broken for caching: signed URL tokens change every
-  // 50 min, so the browser treats each new token as a fresh resource and re-fetches all
-  // image bytes from Supabase on every cache miss — regardless of Cache-Control on the
-  // redirect. Proxying here routes bytes through Vercel on the first load, but the
-  // 24 h browser cache means Supabase egress drops from "every 50 min per user" to
-  // "once per day per user".
-  const upstream = await fetch(signedUrl)
-  if (!upstream.ok || !upstream.body) {
-    return NextResponse.json({ error: 'Failed to fetch file' }, { status: 502 })
+  // ── Images (R2 private or Supabase) ───────────────────────────────────
+  // Proxy bytes so the browser can cache at the stable /api/media/url/{filename}
+  // URL for 24 h. Redirecting to a signed URL breaks caching because the token
+  // changes on every cache miss — the browser would re-download every image every
+  // 50 min. Proxying here costs Vercel bandwidth on first load but eliminates
+  // repeated storage egress.
+  let buffer: Buffer
+  let contentType: string
+  try {
+    ;({ buffer, contentType } = await downloadFile(filename))
+  } catch {
+    return NextResponse.json({ error: 'File not found' }, { status: 404 })
   }
 
-  const headers: HeadersInit = { 'Cache-Control': 'private, max-age=86400' }
-  const ct = upstream.headers.get('Content-Type')
-  if (ct) headers['Content-Type'] = ct
-  const cl = upstream.headers.get('Content-Length')
-  if (cl) headers['Content-Length'] = cl
-
-  return new Response(upstream.body, { headers })
+  return new Response(new Uint8Array(buffer), {
+    headers: {
+      'Content-Type': contentType,
+      'Content-Length': String(buffer.byteLength),
+      'Cache-Control': 'private, max-age=86400',
+    },
+  })
 }
