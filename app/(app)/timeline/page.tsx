@@ -9,7 +9,7 @@ export default async function TimelinePage() {
       media: { orderBy: { createdAt: 'asc' } },
       trip: { select: { id: true, name: true, color: true } },
     },
-    orderBy: { date: 'desc' },
+    orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
   })
 
   type CardEntry = React.ComponentProps<typeof EntryCard>['entry']

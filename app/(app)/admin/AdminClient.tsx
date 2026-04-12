@@ -26,7 +26,8 @@ interface BulkGroup {
   key: string
   files: File[]
   previews: string[]
-  date: string
+  date: string          // YYYY-MM-DD for display / input
+  dateTime?: string     // full ISO timestamp from EXIF (preserves time-of-day for sorting)
   latitude: string
   longitude: string
   city: string
@@ -162,7 +163,7 @@ async function groupFiles(
       key: `group-${i}-${date}`,
       files: g.files,
       previews: g.files.slice(0, 4).map(f => URL.createObjectURL(f)),
-      date, latitude: avgLat, longitude: avgLng,
+      date, dateTime: g.dates[0]?.toISOString(), latitude: avgLat, longitude: avgLng,
       city: '', country: '',
       title: autoTitle(date),
       description: '', tripId: '',
@@ -568,7 +569,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
             body: JSON.stringify({
               title:       g.title       || undefined,
               description: g.description || null,
-              date:        g.date,
+              date:        g.dateTime ?? g.date,
               latitude:    g.latitude    || null,
               longitude:   g.longitude   || null,
               city:        g.city        || null,
@@ -1097,7 +1098,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                         </div>
                         <div>
                           <label className="block text-xs font-medium text-[#404040] mb-1">Date</label>
-                          <input type="date" value={group.date} onChange={e => setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, date: e.target.value } : g))} className={inputCls} disabled={bulkStage === 'uploading'} />
+                          <input type="date" value={group.date} onChange={e => setBulkGroups(prev => prev.map((g, i) => i === gi ? { ...g, date: e.target.value, dateTime: e.target.value } : g))} className={inputCls} disabled={bulkStage === 'uploading'} />
                         </div>
                         <div className="sm:col-span-2 flex items-center gap-3">
                           {group.latitude
