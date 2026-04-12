@@ -5,6 +5,8 @@ import Image from 'next/image'
 import MediaModal from '@/components/media/MediaModal'
 import { formatDate, formatTime } from '@/lib/utils'
 import { blurhashToDataURL } from '@/lib/blurhash-to-data-url'
+import WeatherBadge from '@/components/weather/WeatherBadge'
+import type { WeatherData } from '@/lib/weather'
 
 interface Media {
   id: string
@@ -33,6 +35,7 @@ interface Entry {
   longitude?: number | null
   city?: string | null
   country?: string | null
+  weather?: WeatherData | null
   media: Media[]
   trip?: Trip | null
 }
@@ -125,6 +128,13 @@ export default function EntryCard({ entry, showTime }: { entry: Entry; showTime?
               </div>
             </div>
           </div>
+
+          {/* Weather */}
+          {entry.weather && (
+            <div className="mt-2">
+              <WeatherBadge weather={entry.weather} />
+            </div>
+          )}
 
           {/* Description */}
           {entry.description && (

@@ -42,6 +42,7 @@ interface JourneyEntry {
   longitude: number | null
   city?: string | null
   country?: string | null
+  weather?: import('@/lib/weather').WeatherData | null
   media: Media[]
   trip?: Trip | null
 }

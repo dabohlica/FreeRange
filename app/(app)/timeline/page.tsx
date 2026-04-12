@@ -23,6 +23,7 @@ export default async function TimelinePage() {
     longitude: e.longitude,
     city: e.city,
     country: e.country,
+    weather: e.weather as import('@/lib/weather').WeatherData | null,
     trip: e.trip,
     media: e.media.map((m) => ({
       id: m.id,

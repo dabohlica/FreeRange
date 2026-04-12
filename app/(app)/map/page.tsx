@@ -18,6 +18,7 @@ export default async function HomePage() {
       entries={entries.map((e) => ({
         ...e,
         date: e.date.toISOString(),
+        weather: e.weather as import('@/lib/weather').WeatherData | null,
         media: e.media.map((m) => ({
           ...m,
           takenAt: m.takenAt?.toISOString() ?? null,

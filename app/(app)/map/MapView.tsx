@@ -5,6 +5,8 @@ import dynamic from 'next/dynamic'
 import Image from 'next/image'
 import MediaModal from '@/components/media/MediaModal'
 import { formatDate } from '@/lib/utils'
+import WeatherBadge from '@/components/weather/WeatherBadge'
+import type { WeatherData } from '@/lib/weather'
 
 const TravelMap = dynamic(() => import('@/components/map/TravelMap'), {
   ssr: false,
@@ -37,6 +39,7 @@ interface Entry {
   longitude: number | null
   city?: string | null
   country?: string | null
+  weather?: WeatherData | null
   media: Media[]
 }
 
@@ -176,6 +179,12 @@ export default function MapView({
                   </span>
                 )}
               </div>
+
+              {selectedEntry.weather && (
+                <div className="mt-2">
+                  <WeatherBadge weather={selectedEntry.weather} />
+                </div>
+              )}
 
               {selectedEntry.description && (
                 <p className="mt-2 text-sm text-[#737373] leading-relaxed line-clamp-4">

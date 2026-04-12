@@ -30,6 +30,7 @@ export default async function AdminPage() {
         date: e.date.toISOString(),
         createdAt: e.createdAt.toISOString(),
         updatedAt: e.updatedAt.toISOString(),
+        weather: e.weather as import('@/lib/weather').WeatherData | null,
         media: e.media.map((m) => ({
           ...m,
           takenAt: m.takenAt?.toISOString() ?? null,
