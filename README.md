@@ -8,6 +8,11 @@ Every entry lands as a photo pin on a fullscreen Mapbox map. Pins show circular 
 ### 📸 Photo & Video Upload
 Drag and drop photos and videos directly onto an entry. EXIF GPS data is extracted automatically and used to place the entry on the map. City and country are reverse-geocoded in the background. Supports JPEG, PNG, HEIC, WebP, MP4, MOV and more — up to 100 MB per file.
 
+Uploaded photos are automatically processed into **400px JPEG thumbnails** with a blurhash placeholder, so the timeline and map load fast even on slow connections. The originals are always preserved. Missing thumbnails for older entries can be regenerated from the Admin panel with a single click.
+
+### 🌤️ Weather Data
+Every entry with GPS coordinates gets historical weather populated automatically at upload time — condition, high/low temperatures, and wind — courtesy of the [Open-Meteo](https://open-meteo.com) archive API (free, no key required). Weather appears on timeline cards, journey cards, and the map sidebar panel. Entries without GPS show nothing. A backfill button in the Admin panel fetches weather for all historical entries at once.
+
 > **⚠️ Mobile upload and GPS metadata**
 > Both Android and iOS strip GPS (and other EXIF) metadata from images when you upload or share them through the browser for privacy reasons. If you upload photos directly from your phone, location data will not be extracted automatically and you will need to set the location manually on the entry.
 >
@@ -44,7 +49,9 @@ Organise entries into named trips with custom colours. Trips appear as coloured 
 | Database | PostgreSQL + Prisma ORM |
 | Auth | JWT in HTTP-only cookies (via `jose`) |
 | Maps | Mapbox GL JS |
-| File storage | Supabase Storage (production) or local filesystem (dev) |
+| File storage | Cloudflare R2 (recommended) · Supabase Storage · local filesystem (dev) |
+| Image processing | Sharp — thumbnails + blurhash placeholders |
+| Weather | Open-Meteo archive API (free, no key required) |
 | EXIF parsing | `exifr` |
 | File upload | React Dropzone |
 
@@ -88,7 +95,7 @@ createdb travel_journal
 cp .env.example .env
 ```
 
-Fill in `.env` for local dev (Supabase vars are optional — omit them and files save to `public/uploads/`):
+Fill in `.env` for local dev (storage vars are optional — omit them and files save to `public/uploads/`):
 
 ```env
 DATABASE_URL="postgresql://postgres:@localhost:5432/travel_journal"
@@ -172,6 +179,14 @@ ADMIN_PASSWORD=           # your admin password
 VIEWER_PASSWORD=          # password you share with friends
 NEXT_PUBLIC_MAPBOX_TOKEN= # pk.your-token-here
 NEXT_PUBLIC_APP_URL=      # https://your-app.vercel.app
+
+# Cloudflare R2 — set all four to enable R2 storage (recommended)
+R2_ACCOUNT_ID=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET_NAME=
+
+# Supabase Storage — only needed if NOT using R2
 SUPABASE_URL=             # https://your-project-ref.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=# your service_role key
 ```
@@ -179,6 +194,67 @@ SUPABASE_SERVICE_ROLE_KEY=# your service_role key
 `NEXT_PUBLIC_APP_URL` can also be left unset on Vercel — the platform sets `VERCEL_URL` automatically.
 
 Vercel will run `prisma generate && next build` on every deploy (configured in `vercel.json`). Schema changes must be pushed manually via `npm run db:push` before deploying.
+
+---
+
+## Setup: Cloudflare R2 Storage (recommended for production)
+
+Cloudflare R2 has no egress fees and generous free limits (10 GB storage, 10M Class A ops/month). It replaces Supabase Storage entirely — the Postgres database on Supabase is unaffected.
+
+### 1. Create an R2 bucket
+
+1. Cloudflare dashboard → **R2** → **Create bucket**
+2. Name it anything (e.g. `travel-journal`) — note the name
+3. Keep the bucket **private** (do not enable public access)
+
+### 2. Create an API token
+
+1. R2 → **Manage R2 API tokens** → **Create API token**
+2. Permissions: **Object Read & Write**
+3. Scope: the specific bucket you just created
+4. Copy the four values shown after creation:
+
+| Value | Env var |
+|-------|---------|
+| Account ID (top of R2 overview page) | `R2_ACCOUNT_ID` |
+| Access Key ID | `R2_ACCESS_KEY_ID` |
+| Secret Access Key | `R2_SECRET_ACCESS_KEY` |
+| Bucket name | `R2_BUCKET_NAME` |
+
+> The Secret Access Key is shown **only once** — copy it immediately.
+
+### 3. Configure CORS on the bucket
+
+The browser uploads files directly to R2 (bypassing Vercel's 4 MB body limit). For this to work, add a CORS rule to your bucket:
+
+R2 → your bucket → **Settings** → **CORS Policy** → paste:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://your-app.vercel.app"],
+    "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+Replace `https://your-app.vercel.app` with your actual deployment URL. For local dev add `http://localhost:3000` as a second entry in `AllowedOrigins`.
+
+### 4. Add env vars
+
+Add the four R2 vars alongside your existing env vars (Vercel dashboard or `.env`):
+
+```env
+R2_ACCOUNT_ID=your-account-id
+R2_ACCESS_KEY_ID=your-access-key-id
+R2_SECRET_ACCESS_KEY=your-secret-access-key
+R2_BUCKET_NAME=travel-journal
+```
+
+When all four are set, the app switches to R2 automatically. Supabase Storage vars (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`) are no longer needed for file storage (keep them only if you use Supabase Postgres).
 
 ---
 
@@ -307,6 +383,12 @@ Schema hasn't been pushed yet.
 ```bash
 npm run db:push && npm run db:seed
 ```
+
+**Large photos fail to upload (> 4 MB)**
+Next.js API routes have a 4 MB body limit. The app works around this with direct browser-to-R2 uploads — but only when all four `R2_*` env vars are set. If you're using Supabase Storage and hitting this limit, migrate to R2.
+
+**R2 uploads fail with CORS error**
+The CORS policy on your R2 bucket is missing or doesn't include your deployment origin. See the CORS step in the R2 setup section above. After saving the policy, hard-refresh the browser.
 
 **Supabase upload fails with 403**
 The `media` bucket must be **private** (not public) and `SUPABASE_SERVICE_ROLE_KEY` must be the `service_role` key, not the `anon` key.
