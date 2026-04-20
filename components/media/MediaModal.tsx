@@ -125,30 +125,36 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
             autoPlay
             className="max-w-full max-h-[85vh] rounded-xl"
           />
-        ) : (
-          // Container sized to the image's aspect ratio so both layers align
-          <div
-            className="relative max-w-full max-h-[85vh] overflow-hidden rounded-xl"
-            style={{ aspectRatio: `${current.width ?? 4} / ${current.height ?? 3}` }}
-          >
-            {/* Thumbnail shown instantly from browser cache while full-res loads */}
-            {current.thumbnailUrl && (
-              <img
-                src={current.thumbnailUrl}
-                alt=""
-                className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-500 ${isFullReady ? 'opacity-0' : 'opacity-100'}`}
-                style={{ filter: 'blur(8px)', transform: 'scale(1.05)' }}
-              />
-            )}
-            {/* Full-res (WebP, capped at 2400px) fades in when ready */}
+        ) : current.thumbnailUrl ? (
+          // Thumbnail-first crossfade: thumbnail stays in-flow to size the container,
+          // full-res overlays it absolutely and fades in when ready.
+          <div className="relative max-w-full max-h-[85vh]">
+            <img
+              src={current.thumbnailUrl}
+              alt=""
+              width={current.width ?? 1200}
+              height={current.height ?? 800}
+              className={`block max-w-full max-h-[85vh] object-contain rounded-xl transition-opacity duration-500 ${isFullReady ? 'opacity-0' : 'opacity-100'}`}
+              style={{ filter: 'blur(8px)' }}
+            />
             <img
               key={current.url}
               src={fullResUrl(current.url)}
               alt={current.filename}
-              className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-500 ${isFullReady ? 'opacity-100' : 'opacity-0'}`}
+              className={`absolute inset-0 w-full h-full object-contain rounded-xl transition-opacity duration-500 ${isFullReady ? 'opacity-100' : 'opacity-0'}`}
               onLoad={() => setIsFullReady(true)}
             />
           </div>
+        ) : (
+          // No thumbnail: load full-res directly
+          <img
+            key={current.url}
+            src={fullResUrl(current.url)}
+            alt={current.filename}
+            width={current.width ?? 1200}
+            height={current.height ?? 800}
+            className="max-w-full max-h-[85vh] object-contain rounded-xl"
+          />
         )}
       </div>
 
