@@ -10,6 +10,8 @@ Drag and drop photos and videos directly onto an entry. EXIF GPS data is extract
 
 Uploaded photos are automatically processed into **400px JPEG thumbnails** with a blurhash placeholder, so the timeline and map load fast even on slow connections. The originals are always preserved. Missing thumbnails for older entries can be regenerated from the Admin panel with a single click.
 
+The media proxy (`/api/media/url/`) serves images as **WebP** to all modern browsers (typically 60–80% smaller than the original JPEG/HEIC) and caps full-res requests at 2400px wide. Processed images are cached in memory on warm server instances. HEIC files are normalised to JPEG for browsers that don't support WebP.
+
 ### 🌤️ Weather Data
 Every entry with GPS coordinates gets historical weather populated automatically at upload time — condition, high/low temperatures, and wind — courtesy of the [Open-Meteo](https://open-meteo.com) archive API (free, no key required). Weather appears on timeline cards, journey cards, and the map sidebar panel. Entries without GPS show nothing. A backfill button in the Admin panel fetches weather for all historical entries at once.
 
@@ -327,13 +329,17 @@ freerange/
 │   ├── (app)/                 # Authenticated pages
 │   │   ├── map/               # Fullscreen Mapbox map (homepage)
 │   │   ├── timeline/          # Chronological entry feed
+│   │   ├── journey/           # Per-trip journey view
 │   │   ├── media/             # Photo grid + media map view
+│   │   ├── live/              # Live location page
 │   │   └── admin/             # Admin dashboard
 │   ├── api/
 │   │   ├── auth/              # login / logout / me
 │   │   ├── entries/           # CRUD entries
-│   │   ├── media/             # List, serve, delete media
-│   │   ├── upload/            # Multipart upload + EXIF parsing
+│   │   ├── media/             # List, delete media
+│   │   │   └── url/[filename] # Authenticated proxy — serves WebP, resizes, caches
+│   │   ├── upload/            # Multipart upload + direct R2 signed URLs
+│   │   ├── weather/           # Weather fetch endpoint
 │   │   ├── location/          # Live GPS read/write
 │   │   └── trips/             # CRUD trips
 │   ├── login/
@@ -342,12 +348,17 @@ freerange/
 │   ├── Navigation.tsx         # Floating glass navbar
 │   ├── map/TravelMap.tsx      # Mapbox markers + live dot
 │   ├── media/                 # MediaModal, MediaGrid
-│   └── entries/EntryCard.tsx  # Timeline card
+│   ├── entries/EntryCard.tsx  # Timeline card
+│   ├── journey/JourneyCard.tsx
+│   └── weather/WeatherBadge.tsx
 ├── lib/
 │   ├── auth.ts                # JWT helpers
 │   ├── exif.ts                # EXIF extraction
 │   ├── gps.ts                 # PAJ scraping + reverse geocoding
-│   ├── upload.ts              # Supabase / local file handling
+│   ├── thumbnail.ts           # Sharp thumbnail + blurhash generation
+│   ├── storage.ts             # R2 / Supabase / local storage abstraction
+│   ├── upload.ts              # File handling helpers
+│   ├── weather.ts             # Open-Meteo integration
 │   └── prisma.ts              # DB client singleton
 ├── prisma/
 │   ├── schema.prisma          # DB models
