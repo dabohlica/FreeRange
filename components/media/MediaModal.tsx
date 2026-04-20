@@ -111,6 +111,7 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
               height={current.height ?? 800}
               className="max-w-full max-h-[85vh] object-contain rounded-xl"
               priority
+              unoptimized
             />
           </div>
         )}
@@ -130,10 +131,10 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
 
       {/* Preload adjacent images */}
       {media.length > 1 && prevItem?.type === 'IMAGE' && prevItem !== current && (
-        <Image src={prevItem.url} alt="" width={prevItem.width ?? 1200} height={prevItem.height ?? 800} priority className="hidden" />
+        <Image src={prevItem.url} alt="" width={prevItem.width ?? 1200} height={prevItem.height ?? 800} priority unoptimized className="hidden" />
       )}
       {media.length > 1 && nextItem?.type === 'IMAGE' && nextItem !== current && (
-        <Image src={nextItem.url} alt="" width={nextItem.width ?? 1200} height={nextItem.height ?? 800} priority className="hidden" />
+        <Image src={nextItem.url} alt="" width={nextItem.width ?? 1200} height={nextItem.height ?? 800} priority unoptimized className="hidden" />
       )}
 
       {/* Date caption */}
