@@ -2,11 +2,26 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
 import { isR2, getR2PublicUrl, downloadFile, createDownloadUrl } from '@/lib/storage'
 
-// Cache signed/presigned download URLs for video redirects.
-// Reset on cold start — fine for Vercel warm instances.
 const videoUrlCache = new Map<string, { url: string; expiresAt: number }>()
-const VIDEO_TTL_S   = 7 * 24 * 3600               // 7 days
-const VIDEO_TTL_MS  = (VIDEO_TTL_S - 3600) * 1000 // cache until 1h before expiry
+const VIDEO_TTL_S   = 7 * 24 * 3600
+const VIDEO_TTL_MS  = (VIDEO_TTL_S - 3600) * 1000
+
+// Processed image cache — keyed by "filename:width:webp"
+// On Vercel Fluid Compute, instances are reused across requests so this avoids
+// re-downloading and re-processing the same image repeatedly.
+const imageCache = new Map<string, { buffer: Buffer; contentType: string }>()
+const IMAGE_CACHE_MAX = 150
+
+function getCached(key: string) {
+  return imageCache.get(key)
+}
+
+function setCached(key: string, value: { buffer: Buffer; contentType: string }) {
+  if (imageCache.size >= IMAGE_CACHE_MAX) {
+    imageCache.delete(imageCache.keys().next().value!)
+  }
+  imageCache.set(key, value)
+}
 
 const VIDEO_EXT = /\.(mp4|mov|webm|avi|m4v)$/i
 
@@ -26,9 +41,6 @@ export async function GET(
   }
 
   // ── R2 with public CDN domain ──────────────────────────────────────────
-  // Best case: redirect straight to the CDN URL — bytes never touch Vercel.
-  // Works for both images (proxied below otherwise) and videos (Range requests
-  // are handled natively by the CDN). URL is permanent so cache for 1 year.
   const r2Public = getR2PublicUrl()
   if (isR2() && r2Public) {
     return NextResponse.redirect(`${r2Public}/${filename}`, {
@@ -39,10 +51,7 @@ export async function GET(
 
   const isVideo = VIDEO_EXT.test(filename)
 
-  // ── Videos (R2 private or Supabase) ───────────────────────────────────
-  // Redirect to a presigned/signed URL so the browser can send Range requests
-  // for seeking. Use a 7-day TTL so the browser redirect cache stays valid for
-  // a week — one download per video per user per week.
+  // ── Videos ────────────────────────────────────────────────────────────
   if (isVideo) {
     const cached = videoUrlCache.get(filename)
     let videoUrl: string
@@ -62,12 +71,28 @@ export async function GET(
     })
   }
 
-  // ── Images (R2 private or Supabase) ───────────────────────────────────
-  // Proxy bytes so the browser can cache at the stable /api/media/url/{filename}
-  // URL for 24 h. Redirecting to a signed URL breaks caching because the token
-  // changes on every cache miss — the browser would re-download every image every
-  // 50 min. Proxying here costs Vercel bandwidth on first load but eliminates
-  // repeated storage egress.
+  // ── Images ────────────────────────────────────────────────────────────
+  const { searchParams } = new URL(request.url)
+  const reqWidth    = parseInt(searchParams.get('w') || '0') || undefined
+  const acceptsWebP = (request.headers.get('accept') ?? '').includes('image/webp')
+  const isHEIC      = /\.(heic|heif)$/i.test(filename)
+
+  // Process when: explicit width requested, browser accepts WebP, or HEIC needs conversion
+  const needsProcessing = reqWidth != null || acceptsWebP || isHEIC
+
+  const cacheKey = `${filename}:${reqWidth ?? ''}:${acceptsWebP ? 'webp' : 'orig'}`
+  const hit = getCached(cacheKey)
+  if (hit) {
+    return new Response(new Uint8Array(hit.buffer), {
+      headers: {
+        'Content-Type': hit.contentType,
+        'Content-Length': String(hit.buffer.byteLength),
+        'Cache-Control': 'private, max-age=86400',
+        'Vary': 'Accept',
+      },
+    })
+  }
+
   let buffer: Buffer
   let contentType: string
   try {
@@ -76,11 +101,31 @@ export async function GET(
     return NextResponse.json({ error: 'File not found' }, { status: 404 })
   }
 
+  if (needsProcessing) {
+    try {
+      const sharp = (await import('sharp')).default
+      let pipeline = sharp(buffer).rotate() // auto-orient from EXIF
+      if (reqWidth) pipeline = pipeline.resize(reqWidth, undefined, { withoutEnlargement: true })
+      if (acceptsWebP) {
+        buffer = await pipeline.webp({ quality: 80 }).toBuffer()
+        contentType = 'image/webp'
+      } else {
+        buffer = await pipeline.jpeg({ quality: 85 }).toBuffer()
+        contentType = 'image/jpeg'
+      }
+    } catch {
+      // fall back to original bytes on sharp failure
+    }
+  }
+
+  setCached(cacheKey, { buffer, contentType })
+
   return new Response(new Uint8Array(buffer), {
     headers: {
       'Content-Type': contentType,
       'Content-Length': String(buffer.byteLength),
       'Cache-Control': 'private, max-age=86400',
+      'Vary': 'Accept',
     },
   })
 }

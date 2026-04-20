@@ -1,11 +1,11 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import Image from 'next/image'
 
 interface MediaItem {
   id: string
   url: string
+  thumbnailUrl?: string | null
   type: string
   filename: string
   width?: number | null
@@ -19,8 +19,14 @@ interface MediaModalProps {
   onClose: () => void
 }
 
+// Cap full-res at 2400px wide — proxy resizes + converts to WebP automatically
+function fullResUrl(url: string) {
+  return `${url}?w=2400`
+}
+
 export default function MediaModal({ media, initialIndex = 0, onClose }: MediaModalProps) {
   const [index, setIndex] = useState(initialIndex)
+  const [isFullReady, setIsFullReady] = useState(false)
   const touchStartX = useRef<number | null>(null)
 
   const prev = useCallback(() => setIndex((i) => (i > 0 ? i - 1 : media.length - 1)), [media.length])
@@ -36,6 +42,27 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose, prev, next])
 
+  const current = media[index]
+
+  // Reset full-res state and imperatively preload adjacent images on index change.
+  // Using new Image() instead of hidden <img> tags — display:none prevents fetching.
+  useEffect(() => {
+    if (!current || current.type !== 'IMAGE') return
+    setIsFullReady(false)
+
+    const prevItem = media[index > 0 ? index - 1 : media.length - 1]
+    const nextItem = media[index < media.length - 1 ? index + 1 : 0]
+    const preloads = [prevItem, nextItem]
+      .filter((item): item is MediaItem => !!item && item !== current && item.type === 'IMAGE')
+      .map((item) => {
+        const img = new window.Image()
+        img.src = fullResUrl(item.url)
+        return img
+      })
+
+    return () => { preloads.forEach((img) => { img.src = '' }) }
+  }, [index, current, media])
+
   function onTouchStart(e: React.TouchEvent) {
     touchStartX.current = e.touches[0].clientX
   }
@@ -47,11 +74,7 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
     touchStartX.current = null
   }
 
-  const current = media[index]
   if (!current) return null
-
-  const prevItem = media[index > 0 ? index - 1 : media.length - 1]
-  const nextItem = media[index < media.length - 1 ? index + 1 : 0]
 
   return (
     <div
@@ -103,15 +126,27 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
             className="max-w-full max-h-[85vh] rounded-xl"
           />
         ) : (
-          <div className="relative max-w-full max-h-[85vh] flex items-center justify-center">
-            <Image
-              src={current.url}
+          // Container sized to the image's aspect ratio so both layers align
+          <div
+            className="relative max-w-full max-h-[85vh] overflow-hidden rounded-xl"
+            style={{ aspectRatio: `${current.width ?? 4} / ${current.height ?? 3}` }}
+          >
+            {/* Thumbnail shown instantly from browser cache while full-res loads */}
+            {current.thumbnailUrl && (
+              <img
+                src={current.thumbnailUrl}
+                alt=""
+                className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-500 ${isFullReady ? 'opacity-0' : 'opacity-100'}`}
+                style={{ filter: 'blur(8px)', transform: 'scale(1.05)' }}
+              />
+            )}
+            {/* Full-res (WebP, capped at 2400px) fades in when ready */}
+            <img
+              key={current.url}
+              src={fullResUrl(current.url)}
               alt={current.filename}
-              width={current.width ?? 1200}
-              height={current.height ?? 800}
-              className="max-w-full max-h-[85vh] object-contain rounded-xl"
-              priority
-              unoptimized
+              className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-500 ${isFullReady ? 'opacity-100' : 'opacity-0'}`}
+              onLoad={() => setIsFullReady(true)}
             />
           </div>
         )}
@@ -127,14 +162,6 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
             <polyline points="9 18 15 12 9 6"/>
           </svg>
         </button>
-      )}
-
-      {/* Preload adjacent images */}
-      {media.length > 1 && prevItem?.type === 'IMAGE' && prevItem !== current && (
-        <Image src={prevItem.url} alt="" width={prevItem.width ?? 1200} height={prevItem.height ?? 800} priority unoptimized className="hidden" />
-      )}
-      {media.length > 1 && nextItem?.type === 'IMAGE' && nextItem !== current && (
-        <Image src={nextItem.url} alt="" width={nextItem.width ?? 1200} height={nextItem.height ?? 800} priority unoptimized className="hidden" />
       )}
 
       {/* Date caption */}
