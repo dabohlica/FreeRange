@@ -39,11 +39,13 @@ export async function POST(req: NextRequest) {
   }
 
   let thumbnailUrl: string | null = null
-  let blurhash: string | null = null
+  let webUrl:       string | null = null
+  let blurhash:     string | null = null
   try {
     const result = await generateThumbnailAndBlurhash(buffer, storedFilename)
     thumbnailUrl = result.thumbUrl
-    blurhash = result.blurhash
+    webUrl       = result.webUrl
+    blurhash     = result.blurhash
   } catch (err) {
     console.error('[upload/register] thumbnail gen failed', err)
   }
@@ -66,6 +68,7 @@ export async function POST(req: NextRequest) {
       hash,
       entryId,
       thumbnailUrl,
+      webUrl,
       blurhash,
     },
   })

@@ -12,6 +12,7 @@ interface Media {
   id: string
   url: string
   thumbnailUrl?: string | null
+  webUrl?: string | null
   blurhash?: string | null
   type: string
   filename: string

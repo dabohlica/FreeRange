@@ -341,6 +341,33 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
     remaining: number | null
   }>({ processed: 0, failed: 0, remaining: null })
 
+  // ── Backfill web versions ────────────────────────────────────────────────
+  const [webBackfillRunning, setWebBackfillRunning] = useState(false)
+  const [webBackfillStatus, setWebBackfillStatus] = useState<{
+    processed: number; failed: number; remaining: number | null
+  }>({ processed: 0, failed: 0, remaining: null })
+
+  const runWebBackfill = async () => {
+    setWebBackfillRunning(true)
+    setWebBackfillStatus({ processed: 0, failed: 0, remaining: null })
+    let totalProcessed = 0, totalFailed = 0
+    try {
+      while (true) {
+        const res = await fetch('/api/admin/backfill-web', { method: 'POST' })
+        if (!res.ok) throw new Error(`backfill failed: ${res.status}`)
+        const json = await res.json() as { processed: number; failed: number; remaining: number }
+        totalProcessed += json.processed
+        totalFailed += json.failed
+        setWebBackfillStatus({ processed: totalProcessed, failed: totalFailed, remaining: json.remaining })
+        if (json.remaining === 0 || json.processed === 0) break
+      }
+    } catch (err) {
+      console.error('[admin] web backfill error', err)
+    } finally {
+      setWebBackfillRunning(false)
+    }
+  }
+
   // ── Backfill handler ─────────────────────────────────────────────────────
   const runBackfill = async (reset = false) => {
     setBackfillRunning(true)
@@ -748,6 +775,23 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                   {backfillStatus.remaining !== null && ` · Remaining: ${backfillStatus.remaining}`}
                 </p>
               )}
+              <div className="mt-3 flex gap-2 items-center flex-wrap">
+                <button
+                  type="button"
+                  onClick={runWebBackfill}
+                  disabled={webBackfillRunning}
+                  className="px-4 py-2 bg-violet-600 text-white rounded disabled:opacity-50"
+                >
+                  {webBackfillRunning ? 'Generating…' : 'Generate web images'}
+                </button>
+                {(webBackfillRunning || webBackfillStatus.remaining !== null) && (
+                  <span className="text-sm">
+                    {webBackfillStatus.processed} done
+                    {webBackfillStatus.remaining !== null && ` · ${webBackfillStatus.remaining} remaining`}
+                    {webBackfillStatus.failed > 0 && ` · ${webBackfillStatus.failed} failed`}
+                  </span>
+                )}
+              </div>
               <div className="mt-3 flex gap-2 items-center flex-wrap">
                 <button
                   type="button"

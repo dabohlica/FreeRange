@@ -6,6 +6,7 @@ interface MediaItem {
   id: string
   url: string
   thumbnailUrl?: string | null
+  webUrl?: string | null
   type: string
   filename: string
   width?: number | null
@@ -19,9 +20,9 @@ interface MediaModalProps {
   onClose: () => void
 }
 
-// Cap full-res at 2400px wide — proxy resizes + converts to WebP automatically
-function fullResUrl(url: string) {
-  return `${url}?w=2400`
+// Use pre-generated WebP if available, otherwise fall back to proxy with resize
+function getFullResUrl(item: MediaItem) {
+  return item.webUrl ?? `${item.url}?w=2400`
 }
 
 export default function MediaModal({ media, initialIndex = 0, onClose }: MediaModalProps) {
@@ -56,7 +57,7 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
       .filter((item): item is MediaItem => !!item && item !== current && item.type === 'IMAGE')
       .map((item) => {
         const img = new window.Image()
-        img.src = fullResUrl(item.url)
+        img.src = getFullResUrl(item)
         return img
       })
 
@@ -139,7 +140,7 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
             />
             <img
               key={current.url}
-              src={fullResUrl(current.url)}
+              src={getFullResUrl(current)}
               alt={current.filename}
               className={`absolute inset-0 w-full h-full object-contain rounded-xl transition-opacity duration-500 ${isFullReady ? 'opacity-100' : 'opacity-0'}`}
               onLoad={() => setIsFullReady(true)}
@@ -149,7 +150,7 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
           // No thumbnail: load full-res directly
           <img
             key={current.url}
-            src={fullResUrl(current.url)}
+            src={getFullResUrl(current)}
             alt={current.filename}
             width={current.width ?? 1200}
             height={current.height ?? 800}

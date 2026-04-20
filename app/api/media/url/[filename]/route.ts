@@ -6,6 +6,12 @@ const videoUrlCache = new Map<string, { url: string; expiresAt: number }>()
 const VIDEO_TTL_S   = 7 * 24 * 3600
 const VIDEO_TTL_MS  = (VIDEO_TTL_S - 3600) * 1000
 
+// web_* files are pre-processed 2400px WebPs — redirect directly to R2/Supabase
+// signed URL so bytes never flow through Vercel.
+const webUrlCache  = new Map<string, { url: string; expiresAt: number }>()
+const WEB_TTL_S    = 86400           // 24h signed URL
+const WEB_TTL_MS   = (WEB_TTL_S - 3600) * 1000 // cache until 1h before expiry
+
 // Processed image cache — keyed by "filename:width:webp"
 // On Vercel Fluid Compute, instances are reused across requests so this avoids
 // re-downloading and re-processing the same image repeatedly.
@@ -46,6 +52,28 @@ export async function GET(
     return NextResponse.redirect(`${r2Public}/${filename}`, {
       status: 302,
       headers: { 'Cache-Control': 'private, max-age=31536000' },
+    })
+  }
+
+  // ── Web versions (web_*.webp) — redirect to signed URL, no Vercel bytes ──
+  if (filename.startsWith('web_')) {
+    const hit = webUrlCache.get(filename)
+    if (hit && hit.expiresAt > Date.now()) {
+      return NextResponse.redirect(hit.url, {
+        status: 302,
+        headers: { 'Cache-Control': 'private, max-age=82800' },
+      })
+    }
+    let signedUrl: string
+    try {
+      signedUrl = await createDownloadUrl(filename, WEB_TTL_S)
+    } catch {
+      return NextResponse.json({ error: 'File not found' }, { status: 404 })
+    }
+    webUrlCache.set(filename, { url: signedUrl, expiresAt: Date.now() + WEB_TTL_MS })
+    return NextResponse.redirect(signedUrl, {
+      status: 302,
+      headers: { 'Cache-Control': 'private, max-age=82800' },
     })
   }
 

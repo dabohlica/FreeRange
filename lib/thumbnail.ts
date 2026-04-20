@@ -21,24 +21,31 @@ export interface ThumbnailResult {
   thumbFilename: string
   thumbUrl: string
   blurhash: string
+  webFilename: string
+  webUrl: string
 }
 
 export async function generateThumbnailAndBlurhash(
   buffer: Buffer,
   originalFilename: string,
 ): Promise<ThumbnailResult> {
-  // Read EXIF orientation once and pass it explicitly — more reliable than
-  // sharp's no-arg .rotate() auto-detect which can silently no-op.
   const degrees = await getRotationDegrees(buffer)
 
-  // 1. 400px JPEG thumbnail — rotate BEFORE resize so dimensions are correct
+  // 1. 400px JPEG thumbnail
   const thumbBuffer = await sharp(buffer)
     .rotate(degrees)
     .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
     .jpeg({ quality: 75 })
     .toBuffer()
 
-  // 2. blurhash from 32x32 raw RGBA — same rotation
+  // 2. 2400px WebP web version — served via signed-URL redirect, bypasses Vercel bandwidth
+  const webBuffer = await sharp(buffer)
+    .rotate(degrees)
+    .resize(2400, undefined, { withoutEnlargement: true })
+    .webp({ quality: 82 })
+    .toBuffer()
+
+  // 3. blurhash from 32x32 raw RGBA
   const { data, info } = await sharp(buffer)
     .rotate(degrees)
     .resize(32, 32, { fit: 'inside' })
@@ -47,14 +54,20 @@ export async function generateThumbnailAndBlurhash(
     .toBuffer({ resolveWithObject: true })
   const hash = encode(new Uint8ClampedArray(data), info.width, info.height, 4, 4)
 
-  // 3. Upload to Supabase flat bucket with `thumb_` prefix
-  // (underscore — bucket is flat, slash would fail auth proxy validation)
-  const thumbFilename = `thumb_${originalFilename.replace(/\.[^.]+$/, '.jpg')}`
-  await uploadFile(thumbBuffer, thumbFilename, 'image/jpeg')
+  const base = originalFilename.replace(/\.[^.]+$/, '')
+  const thumbFilename = `thumb_${base}.jpg`
+  const webFilename   = `web_${base}.webp`
+
+  await Promise.all([
+    uploadFile(thumbBuffer, thumbFilename, 'image/jpeg'),
+    uploadFile(webBuffer,   webFilename,   'image/webp'),
+  ])
 
   return {
     thumbFilename,
     thumbUrl: `/api/media/url/${thumbFilename}`,
     blurhash: hash,
+    webFilename,
+    webUrl: `/api/media/url/${webFilename}`,
   }
 }

@@ -61,6 +61,7 @@ model Media {
   takenAt   DateTime?
   hash         String?   @unique
   thumbnailUrl String?
+  webUrl       String?
   blurhash     String?
   createdAt    DateTime  @default(now())
 
