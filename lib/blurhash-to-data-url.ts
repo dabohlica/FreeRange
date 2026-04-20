@@ -2,12 +2,12 @@
 
 import { decode } from 'blurhash'
 
-/**
- * Decode a blurhash string into a base64 PNG data URL suitable for
- * next/image's `blurDataURL` prop. Browser-only (uses canvas).
- */
+const cache = new Map<string, string>()
+
 export function blurhashToDataURL(hash: string, width = 32, height = 32): string {
   if (typeof document === 'undefined') return ''
+  const key = `${hash}:${width}x${height}`
+  if (cache.has(key)) return cache.get(key)!
   try {
     const pixels = decode(hash, width, height)
     const canvas = document.createElement('canvas')
@@ -18,7 +18,9 @@ export function blurhashToDataURL(hash: string, width = 32, height = 32): string
     const imageData = ctx.createImageData(width, height)
     imageData.data.set(pixels)
     ctx.putImageData(imageData, 0, 0)
-    return canvas.toDataURL()
+    const url = canvas.toDataURL()
+    cache.set(key, url)
+    return url
   } catch {
     return ''
   }

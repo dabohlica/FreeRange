@@ -50,6 +50,9 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
   const current = media[index]
   if (!current) return null
 
+  const prevItem = media[index > 0 ? index - 1 : media.length - 1]
+  const nextItem = media[index < media.length - 1 ? index + 1 : 0]
+
   return (
     <div
       className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center"
@@ -123,6 +126,14 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
             <polyline points="9 18 15 12 9 6"/>
           </svg>
         </button>
+      )}
+
+      {/* Preload adjacent images */}
+      {media.length > 1 && prevItem?.type === 'IMAGE' && prevItem !== current && (
+        <Image src={prevItem.url} alt="" width={prevItem.width ?? 1200} height={prevItem.height ?? 800} priority className="hidden" />
+      )}
+      {media.length > 1 && nextItem?.type === 'IMAGE' && nextItem !== current && (
+        <Image src={nextItem.url} alt="" width={nextItem.width ?? 1200} height={nextItem.height ?? 800} priority className="hidden" />
       )}
 
       {/* Date caption */}
