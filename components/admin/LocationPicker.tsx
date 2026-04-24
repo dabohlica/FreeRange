@@ -15,59 +15,76 @@ export default function LocationPicker({ initialLat, initialLng, onConfirm, onCl
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef       = useRef<mapboxgl.Map | null>(null)
   const markerRef    = useRef<mapboxgl.Marker | null>(null)
+  const mountedRef   = useRef(true)
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
     initialLat != null && initialLng != null ? { lat: initialLat, lng: initialLng } : null
   )
+  const [mapError, setMapError] = useState(false)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
-    if (!token) return
+    if (!token) { setMapError(true); return }
 
-    mapboxgl.accessToken = token
-    const map = new mapboxgl.Map({
-      container: containerRef.current,
-      style: 'mapbox://styles/mapbox/light-v11',
-      center: initialLng != null && initialLat != null ? [initialLng, initialLat] : [10, 20],
-      zoom: initialLat != null ? 10 : 2,
-      attributionControl: false,
-    })
-
-    map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'bottom-right')
-
-    // Place initial marker if coords exist
-    if (initialLat != null && initialLng != null) {
-      markerRef.current = new mapboxgl.Marker({ color: '#171717', draggable: true })
-        .setLngLat([initialLng, initialLat])
-        .addTo(map)
-
-      markerRef.current.on('dragend', () => {
-        const pos = markerRef.current!.getLngLat()
-        setCoords({ lat: pos.lat, lng: pos.lng })
+    try {
+      mapboxgl.accessToken = token
+      const map = new mapboxgl.Map({
+        container: containerRef.current,
+        style: 'mapbox://styles/mapbox/light-v11',
+        center: initialLng != null && initialLat != null ? [initialLng, initialLat] : [10, 20],
+        zoom: initialLat != null ? 10 : 2,
+        attributionControl: false,
       })
-    }
 
-    // Click to place / move marker
-    map.on('click', (e) => {
-      const { lat, lng } = e.lngLat
-      if (markerRef.current) {
-        markerRef.current.setLngLat([lng, lat])
-      } else {
+      map.on('error', () => { if (mountedRef.current) setMapError(true) })
+
+      map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'bottom-right')
+
+      if (initialLat != null && initialLng != null) {
         markerRef.current = new mapboxgl.Marker({ color: '#171717', draggable: true })
-          .setLngLat([lng, lat])
+          .setLngLat([initialLng, initialLat])
           .addTo(map)
+
         markerRef.current.on('dragend', () => {
+          if (!mountedRef.current) return
           const pos = markerRef.current!.getLngLat()
           setCoords({ lat: pos.lat, lng: pos.lng })
         })
       }
-      setCoords({ lat, lng })
-    })
 
-    map.getCanvas().style.cursor = 'crosshair'
-    mapRef.current = map
+      map.on('click', (e) => {
+        if (!mountedRef.current) return
+        const { lat, lng } = e.lngLat
+        if (markerRef.current) {
+          markerRef.current.setLngLat([lng, lat])
+        } else {
+          markerRef.current = new mapboxgl.Marker({ color: '#171717', draggable: true })
+            .setLngLat([lng, lat])
+            .addTo(map)
+          markerRef.current.on('dragend', () => {
+            if (!mountedRef.current) return
+            const pos = markerRef.current!.getLngLat()
+            setCoords({ lat: pos.lat, lng: pos.lng })
+          })
+        }
+        setCoords({ lat, lng })
+      })
 
-    return () => { map.remove(); mapRef.current = null }
+      map.getCanvas().style.cursor = 'crosshair'
+      mapRef.current = map
+    } catch {
+      if (mountedRef.current) setMapError(true)
+    }
+
+    return () => {
+      try { mapRef.current?.remove() } catch { /* ignore */ }
+      mapRef.current = null
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -86,7 +103,13 @@ export default function LocationPicker({ initialLat, initialLng, onConfirm, onCl
         </div>
 
         {/* Map */}
-        <div ref={containerRef} className="flex-1" style={{ minHeight: '380px' }} />
+        {mapError ? (
+          <div className="flex-1 flex items-center justify-center text-sm text-[#a3a3a3]" style={{ minHeight: '380px' }}>
+            Map failed to load. Enter coordinates manually.
+          </div>
+        ) : (
+          <div ref={containerRef} className="flex-1" style={{ minHeight: '380px' }} />
+        )}
 
         {/* Footer */}
         <div className="flex items-center justify-between gap-4 px-5 py-4 border-t border-[#e5e5e5] bg-[#fafaf9]">
