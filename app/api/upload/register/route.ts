@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const { entryId, storedFilename, originalName, size } = await req.json()
+  const { entryId, storedFilename, originalName, size, thumbnailFilename } = await req.json()
   if (!entryId || !storedFilename || !originalName) {
     return NextResponse.json({ error: 'entryId, storedFilename, originalName required' }, { status: 400 })
   }
@@ -41,13 +41,18 @@ export async function POST(req: NextRequest) {
   let thumbnailUrl: string | null = null
   let webUrl:       string | null = null
   let blurhash:     string | null = null
-  try {
-    const result = await generateThumbnailAndBlurhash(buffer, storedFilename)
-    thumbnailUrl = result.thumbUrl
-    webUrl       = result.webUrl
-    blurhash     = result.blurhash
-  } catch (err) {
-    console.error('[upload/register] thumbnail gen failed', err)
+  const mediaType = getMediaType(originalName)
+  if (mediaType === 'IMAGE') {
+    try {
+      const result = await generateThumbnailAndBlurhash(buffer, storedFilename)
+      thumbnailUrl = result.thumbUrl
+      webUrl       = result.webUrl
+      blurhash     = result.blurhash
+    } catch (err) {
+      console.error('[upload/register] thumbnail gen failed', err)
+    }
+  } else if (thumbnailFilename) {
+    thumbnailUrl = `/api/media/url/${thumbnailFilename}`
   }
 
   const exif = await extractExif(buffer)

@@ -185,6 +185,41 @@ async function groupFiles(
 // Falls back to /api/upload (direct route) for local dev without Supabase.
 type UploadResult = { status: 'done' | 'skipped' | 'failed'; error?: string }
 
+function isVideoFile(file: File): boolean {
+  return file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|avi)$/i.test(file.name)
+}
+
+async function captureVideoThumbnail(file: File): Promise<Blob | null> {
+  return new Promise((resolve) => {
+    const video = document.createElement('video')
+    const url = URL.createObjectURL(file)
+    video.src = url
+    video.muted = true
+    video.playsInline = true
+
+    const cleanup = () => { URL.revokeObjectURL(url); video.src = '' }
+    const done = (b: Blob | null) => { cleanup(); resolve(b) }
+    const timer = setTimeout(() => done(null), 8000)
+
+    video.onloadedmetadata = () => {
+      video.currentTime = Math.min(1, video.duration * 0.1)
+    }
+    video.onseeked = () => {
+      clearTimeout(timer)
+      try {
+        const canvas = document.createElement('canvas')
+        const scale = Math.min(1, 800 / (video.videoWidth || 800))
+        canvas.width  = Math.round((video.videoWidth  || 800) * scale)
+        canvas.height = Math.round((video.videoHeight || 450) * scale)
+        canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height)
+        canvas.toBlob(done, 'image/jpeg', 0.8)
+      } catch { done(null) }
+    }
+    video.onerror = () => { clearTimeout(timer); done(null) }
+    video.load()
+  })
+}
+
 async function uploadFile(file: File, entryId: string, signal: AbortSignal): Promise<UploadResult> {
   if (signal.aborted) return { status: 'failed', error: 'Cancelled' }
   try {
@@ -210,7 +245,31 @@ async function uploadFile(file: File, entryId: string, signal: AbortSignal): Pro
 
     const { signedUrl, storedFilename } = await signedRes.json()
 
-    // Step 2: PUT the file directly to Supabase (no Next.js in the middle)
+    // For videos: capture a thumbnail frame and upload it alongside the main file
+    let thumbnailFilename: string | undefined
+    if (isVideoFile(file)) {
+      const [thumbBlob, thumbUrlRes] = await Promise.all([
+        captureVideoThumbnail(file),
+        fetch('/api/upload/signed-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: 'thumb.jpg' }),
+          signal,
+        }),
+      ])
+      if (thumbBlob && thumbUrlRes.ok) {
+        const { signedUrl: thumbSignedUrl, storedFilename: thumbStoredFilename } = await thumbUrlRes.json()
+        const thumbUpload = await fetch(thumbSignedUrl, {
+          method: 'PUT',
+          body: thumbBlob,
+          headers: { 'Content-Type': 'image/jpeg' },
+          signal,
+        })
+        if (thumbUpload.ok) thumbnailFilename = thumbStoredFilename
+      }
+    }
+
+    // Step 2: PUT the file directly to storage (no Next.js in the middle)
     const uploadRes = await fetch(signedUrl, {
       method: 'PUT',
       body: file,
@@ -226,7 +285,7 @@ async function uploadFile(file: File, entryId: string, signal: AbortSignal): Pro
     const regRes = await fetch('/api/upload/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entryId, storedFilename, originalName: file.name, size: file.size }),
+      body: JSON.stringify({ entryId, storedFilename, originalName: file.name, size: file.size, thumbnailFilename }),
       signal,
     })
     const regData = await regRes.json()
