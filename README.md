@@ -35,6 +35,11 @@ No accounts, no sign-up. Just two passwords: one for you (admin — create, edit
 ### 📍 Live Location
 Connect a PAJ GPS tracker and a pulsing dot shows your real-time position on the map, updated every 45 seconds. No tracker? Set your location manually from the admin panel.
 
+### 📊 Stats
+A summary page at `/stats` showing: total entries, trips, countries visited, cities visited, days on the road, distance traveled (Haversine between GPS-tagged entries), photos, and videos. A countries-visited tag list is shown at the bottom.
+
+> **Note:** Country, city, and trip counts are derived from the values entered in the admin entry form. Country and city are reverse-geocoded automatically when GPS data is present, but they can also be set or overridden manually. If an entry has no country or city filled in, it is not counted.
+
 ### ✈️ Trip Grouping
 Organise entries into named trips with custom colours. Trips appear as coloured badges on timeline cards and as distinct pin clusters on the map.
 
@@ -332,6 +337,7 @@ freerange/
 │   │   ├── journey/           # Per-trip journey view
 │   │   ├── media/             # Photo grid + media map view
 │   │   ├── live/              # Live location page
+│   │   ├── stats/             # Stats summary page
 │   │   └── admin/             # Admin dashboard
 │   ├── api/
 │   │   ├── auth/              # login / logout / me
