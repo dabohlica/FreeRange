@@ -53,7 +53,8 @@ export async function fetchWeather(
       `https://archive-api.open-meteo.com/v1/archive` +
       `?latitude=${lat}&longitude=${lng}` +
       `&start_date=${date}&end_date=${date}` +
-      `&daily=temperature_2m_max,temperature_2m_min,weathercode,windspeed_10m_max,winddirection_10m_dominant` +
+      `&daily=temperature_2m_max,temperature_2m_min,windspeed_10m_max,winddirection_10m_dominant` +
+      `&hourly=weathercode` +
       `&timezone=UTC`
 
     const res = await fetch(url)
@@ -65,9 +66,16 @@ export async function fetchWeather(
     const daily = data.daily
     const tempMax = daily.temperature_2m_max[0]
     const tempMin = daily.temperature_2m_min[0]
-    const code = daily.weathercode[0]
     const windSpeed = daily.windspeed_10m_max[0]
     const windDirection = daily.winddirection_10m_dominant[0]
+
+    // Pick the most frequent WMO code across all 24 hours instead of the daily worst
+    const hourlyCodes: number[] = data.hourly?.weathercode ?? []
+    const freq: Record<number, number> = {}
+    for (const c of hourlyCodes) if (c != null) freq[c] = (freq[c] ?? 0) + 1
+    const code = hourlyCodes.length
+      ? parseInt(Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0])
+      : null
 
     if (
       tempMax == null || tempMax === undefined ||
