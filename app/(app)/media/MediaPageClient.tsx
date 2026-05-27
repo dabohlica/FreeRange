@@ -14,6 +14,8 @@ interface MediaItem {
   id: string
   url: string
   thumbnailUrl?: string | null
+  midUrl?: string | null
+  webUrl?: string | null
   blurhash?: string | null
   type: string
   filename: string
