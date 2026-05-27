@@ -1,5 +1,5 @@
 {
   "framework": "nextjs",
-  "buildCommand": "prisma migrate deploy && prisma generate && next build",
+  "buildCommand": "prisma db execute --file ./scripts/migrate.sql && prisma generate && next build",
   "installCommand": "npm install"
 }
