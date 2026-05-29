@@ -6,6 +6,7 @@ interface MediaItem {
   id: string
   url: string
   thumbnailUrl?: string | null
+  midUrl?: string | null
   webUrl?: string | null
   type: string
   filename: string
@@ -20,13 +21,18 @@ interface MediaModalProps {
   onClose: () => void
 }
 
-// Use pre-generated WebP if available, otherwise fall back to proxy with resize
 function getFullResUrl(item: MediaItem) {
   return item.webUrl ?? `${item.url}?w=2400`
 }
 
+function getMidUrl(item: MediaItem) {
+  return item.midUrl ?? `${item.url}?w=900`
+}
+
 export default function MediaModal({ media, initialIndex = 0, onClose }: MediaModalProps) {
   const [index, setIndex] = useState(initialIndex)
+  // Progressive: thumb (blurred) → mid (sharp, fast) → full (full-res)
+  const [isMidReady, setIsMidReady]   = useState(false)
   const [isFullReady, setIsFullReady] = useState(false)
   const touchStartX = useRef<number | null>(null)
 
@@ -45,20 +51,20 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
 
   const current = media[index]
 
-  // Reset full-res state and imperatively preload adjacent images on index change.
-  // Using new Image() instead of hidden <img> tags — display:none prevents fetching.
+  // Reset state and imperatively preload adjacent images on index change
   useEffect(() => {
     if (!current || current.type !== 'IMAGE') return
+    setIsMidReady(false)
     setIsFullReady(false)
 
     const prevItem = media[index > 0 ? index - 1 : media.length - 1]
     const nextItem = media[index < media.length - 1 ? index + 1 : 0]
     const preloads = [prevItem, nextItem]
       .filter((item): item is MediaItem => !!item && item !== current && item.type === 'IMAGE')
-      .map((item) => {
-        const img = new window.Image()
-        img.src = getFullResUrl(item)
-        return img
+      .flatMap((item) => {
+        const mid  = new window.Image(); mid.src  = getMidUrl(item)
+        const full = new window.Image(); full.src = getFullResUrl(item)
+        return [mid, full]
       })
 
     return () => { preloads.forEach((img) => { img.src = '' }) }
@@ -127,19 +133,31 @@ export default function MediaModal({ media, initialIndex = 0, onClose }: MediaMo
             className="max-w-full max-h-[85vh] rounded-xl"
           />
         ) : current.thumbnailUrl ? (
-          // Thumbnail-first crossfade: thumbnail stays in-flow to size the container,
-          // full-res overlays it absolutely and fades in when ready.
+          // Three-stage progressive loading:
+          // 1. Blurred 400px thumbnail (instant — cached from grid)
+          // 2. Sharp 900px mid version (fast — small file)
+          // 3. Full 2400px web version (slow — large file, crossfades in)
           <div className="relative max-w-full max-h-[85vh]">
+            {/* Stage 1: blurred thumbnail — sizes the container, hidden once mid is ready */}
             <img
               src={current.thumbnailUrl}
               alt=""
               width={current.width ?? 1200}
               height={current.height ?? 800}
-              className={`block max-w-full max-h-[85vh] object-contain rounded-xl transition-opacity duration-500 ${isFullReady ? 'opacity-0' : 'opacity-100'}`}
-              style={{ filter: 'blur(8px)' }}
+              className={`block max-w-full max-h-[85vh] object-contain rounded-xl transition-opacity duration-300 ${isMidReady ? 'opacity-0' : 'opacity-100'}`}
+              style={{ filter: 'blur(12px)', transform: 'scale(1.02)' }}
             />
+            {/* Stage 2: mid-res (900px) — visible between thumb and full-res */}
             <img
-              key={current.url}
+              key={`mid-${current.url}`}
+              src={getMidUrl(current)}
+              alt=""
+              className={`absolute inset-0 w-full h-full object-contain rounded-xl transition-opacity duration-300 ${isMidReady && !isFullReady ? 'opacity-100' : 'opacity-0'}`}
+              onLoad={() => setIsMidReady(true)}
+            />
+            {/* Stage 3: full-res — fades in on top when ready */}
+            <img
+              key={`full-${current.url}`}
               src={getFullResUrl(current)}
               alt={current.filename}
               className={`absolute inset-0 w-full h-full object-contain rounded-xl transition-opacity duration-500 ${isFullReady ? 'opacity-100' : 'opacity-0'}`}

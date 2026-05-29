@@ -21,6 +21,8 @@ export interface ThumbnailResult {
   thumbFilename: string
   thumbUrl: string
   blurhash: string
+  midFilename: string
+  midUrl: string
   webFilename: string
   webUrl: string
 }
@@ -31,35 +33,49 @@ export async function generateThumbnailAndBlurhash(
 ): Promise<ThumbnailResult> {
   const degrees = await getRotationDegrees(buffer)
 
-  // 1. 400px JPEG thumbnail
-  const thumbBuffer = await sharp(buffer)
-    .rotate(degrees)
-    .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality: 75 })
-    .toBuffer()
+  // Run all sharp operations in parallel — each creates an independent pipeline
+  const [thumbBuffer, midBuffer, webBuffer, blurhashResult] = await Promise.all([
+    // 1. 400px JPEG thumbnail for grid view
+    sharp(buffer)
+      .rotate(degrees)
+      .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 75 })
+      .toBuffer(),
 
-  // 2. 2400px WebP web version — served via signed-URL redirect, bypasses Vercel bandwidth
-  const webBuffer = await sharp(buffer)
-    .rotate(degrees)
-    .resize(2400, undefined, { withoutEnlargement: true })
-    .webp({ quality: 82 })
-    .toBuffer()
+    // 2. 900px WebP mid version for modal first-stage display
+    sharp(buffer)
+      .rotate(degrees)
+      .resize(900, undefined, { withoutEnlargement: true })
+      .webp({ quality: 82 })
+      .toBuffer(),
 
-  // 3. blurhash from 32x32 raw RGBA
-  const { data, info } = await sharp(buffer)
-    .rotate(degrees)
-    .resize(32, 32, { fit: 'inside' })
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true })
+    // 3. 2400px WebP web version for full-res modal display
+    sharp(buffer)
+      .rotate(degrees)
+      .resize(2400, undefined, { withoutEnlargement: true })
+      .webp({ quality: 82 })
+      .toBuffer(),
+
+    // 4. blurhash from 32x32 raw RGBA
+    sharp(buffer)
+      .rotate(degrees)
+      .resize(32, 32, { fit: 'inside' })
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true }),
+  ])
+
+  const { data, info } = blurhashResult
   const hash = encode(new Uint8ClampedArray(data), info.width, info.height, 4, 4)
 
   const base = originalFilename.replace(/\.[^.]+$/, '')
   const thumbFilename = `thumb_${base}.jpg`
+  const midFilename   = `mid_${base}.webp`
   const webFilename   = `web_${base}.webp`
 
   await Promise.all([
     uploadFile(thumbBuffer, thumbFilename, 'image/jpeg'),
+    uploadFile(midBuffer,   midFilename,   'image/webp'),
     uploadFile(webBuffer,   webFilename,   'image/webp'),
   ])
 
@@ -67,6 +83,8 @@ export async function generateThumbnailAndBlurhash(
     thumbFilename,
     thumbUrl: `/api/media/url/${thumbFilename}`,
     blurhash: hash,
+    midFilename,
+    midUrl: `/api/media/url/${midFilename}`,
     webFilename,
     webUrl: `/api/media/url/${webFilename}`,
   }

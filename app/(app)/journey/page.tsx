@@ -35,6 +35,10 @@ export default async function JourneyPage() {
       width: m.width,
       height: m.height,
       takenAt: m.takenAt?.toISOString() ?? null,
+      thumbnailUrl: m.thumbnailUrl,
+      midUrl: m.midUrl,
+      webUrl: m.webUrl,
+      blurhash: m.blurhash,
     })),
   }))
 

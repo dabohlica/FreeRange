@@ -73,11 +73,13 @@ export async function POST(req: NextRequest) {
     const exif = await extractExif(buffer)
 
     let thumbUrl: string | null = null
+    let midUrl:   string | null = null
     let webUrl:   string | null = null
     let blurhash: string | null = null
     try {
       const result = await generateThumbnailAndBlurhash(buffer, filename)
       thumbUrl = result.thumbUrl
+      midUrl   = result.midUrl
       webUrl   = result.webUrl
       blurhash = result.blurhash
     } catch (err) {
@@ -98,6 +100,7 @@ export async function POST(req: NextRequest) {
         hash,
         entryId,
         thumbnailUrl: thumbUrl,
+        midUrl,
         webUrl,
         blurhash,
       },

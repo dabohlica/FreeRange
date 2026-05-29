@@ -15,13 +15,12 @@ export async function POST() {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
 
-  // Target images missing either webUrl or midUrl
   const remaining = await prisma.media.count({
-    where: { type: 'IMAGE', OR: [{ webUrl: null }, { midUrl: null }] },
+    where: { midUrl: null, type: 'IMAGE' },
   })
 
   const batch = await prisma.media.findMany({
-    where: { type: 'IMAGE', OR: [{ webUrl: null }, { midUrl: null }] },
+    where: { midUrl: null, type: 'IMAGE' },
     take: BATCH_SIZE,
     orderBy: { createdAt: 'asc' },
   })
@@ -33,12 +32,12 @@ export async function POST() {
   for (const media of batch) {
     try {
       const { buffer } = await downloadFile(media.filename)
-      const { webUrl, midUrl, thumbUrl, blurhash } = await generateThumbnailAndBlurhash(buffer, media.filename)
+      const { midUrl, webUrl, thumbUrl, blurhash } = await generateThumbnailAndBlurhash(buffer, media.filename)
       await prisma.media.update({
         where: { id: media.id },
         data: {
-          webUrl,
           midUrl,
+          ...(media.webUrl       ? {} : { webUrl }),
           ...(media.thumbnailUrl ? {} : { thumbnailUrl: thumbUrl, blurhash }),
         },
       })
@@ -46,6 +45,7 @@ export async function POST() {
     } catch (err) {
       failed++
       errors.push(`${media.filename}: ${(err as Error).message}`)
+      console.error('[backfill-mid] failed', media.filename, err)
     }
   }
 
