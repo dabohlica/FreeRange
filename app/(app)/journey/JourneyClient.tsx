@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import dynamic from 'next/dynamic'
-import mapboxgl from 'mapbox-gl'
+import type mapboxgl from 'mapbox-gl'
 import JourneyCard from '@/components/journey/JourneyCard'
 
 const TravelMap = dynamic(() => import('@/components/map/TravelMap'), {

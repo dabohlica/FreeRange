@@ -93,8 +93,14 @@ export async function GET(
     })
   }
 
-  // ── Pre-processed WebPs (web_* and mid_*) — signed URL redirect ────────
-  if (filename.startsWith('web_') || filename.startsWith('mid_')) {
+  // ── Pre-processed variants (thumb_*, mid_*, web_*) — signed URL redirect ──
+  // These are generated at upload time, so serve them as direct redirects
+  // instead of downloading and re-encoding through Sharp on every request.
+  if (
+    filename.startsWith('web_') ||
+    filename.startsWith('mid_') ||
+    filename.startsWith('thumb_')
+  ) {
     let signedUrl: string
     try {
       signedUrl = await getSignedUrl(filename, WEB_TTL_S, webUrlCache, webPending, WEB_TTL_MS)
