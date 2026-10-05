@@ -6,6 +6,7 @@ import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { useDropzone } from 'react-dropzone'
 import { formatDate, formatFileSize } from '@/lib/utils'
+import BucketExport from '@/components/admin/BucketExport'
 
 const LocationPicker = dynamic(() => import('@/components/admin/LocationPicker'), { ssr: false })
 
@@ -464,33 +465,6 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
     }
   }
 
-  // ── Export originals ─────────────────────────────────────────────────────
-  const [exportLoading, setExportLoading] = useState(false)
-  const [exportError, setExportError] = useState<string | null>(null)
-  const [exportPlan, setExportPlan] = useState<{
-    totalFiles: number
-    totalBytes: number
-    parts: { part: number; files: number; bytes: number }[]
-  } | null>(null)
-
-  const loadExportPlan = async () => {
-    setExportLoading(true)
-    setExportError(null)
-    try {
-      const res = await fetch('/api/admin/export')
-      if (!res.ok) throw new Error(`export failed: ${res.status}`)
-      setExportPlan(await res.json())
-    } catch (err) {
-      console.error('[admin] export error', err)
-      setExportError('Could not prepare export')
-    } finally {
-      setExportLoading(false)
-    }
-  }
-
-  const formatBytes = (bytes: number) =>
-    bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`
-
   // ── Weather backfill ─────────────────────────────────────────────────────
   const [weatherBackfillRunning, setWeatherBackfillRunning] = useState(false)
   const [weatherBackfillStatus, setWeatherBackfillStatus] = useState<{
@@ -895,44 +869,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                   </span>
                 )}
               </div>
-              <div className="mt-3 flex gap-2 items-center flex-wrap">
-                <button
-                  type="button"
-                  onClick={loadExportPlan}
-                  disabled={exportLoading}
-                  className="px-4 py-2 bg-emerald-600 text-white rounded disabled:opacity-50"
-                >
-                  {exportLoading ? 'Preparing…' : 'Export original images'}
-                </button>
-                {exportError && <span className="text-sm text-[#ef4444]">{exportError}</span>}
-                {exportPlan && (
-                  <span className="text-sm">
-                    {exportPlan.totalFiles} images · {formatBytes(exportPlan.totalBytes)}
-                  </span>
-                )}
-              </div>
-              {exportPlan && exportPlan.parts.length === 0 && (
-                <p className="mt-2 text-sm text-[#737373]">No images to export.</p>
-              )}
-              {exportPlan && exportPlan.parts.length > 0 && (
-                <div className="mt-2 space-y-1">
-                  {exportPlan.parts.length > 1 && (
-                    <p className="text-sm text-[#737373]">
-                      Split into {exportPlan.parts.length} ZIP files — download each one.
-                    </p>
-                  )}
-                  {exportPlan.parts.map((p) => (
-                    <a
-                      key={p.part}
-                      href={`/api/admin/export?part=${p.part}`}
-                      download
-                      className="block text-sm text-emerald-700 underline"
-                    >
-                      {exportPlan.parts.length > 1 ? `Part ${p.part}` : 'Download ZIP'} — {p.files} images, {formatBytes(p.bytes)}
-                    </a>
-                  ))}
-                </div>
-              )}
+              <BucketExport />
             </div>
             {entries.length === 0 && <div className="text-center py-16 text-[#a3a3a3]">No entries yet. Create your first entry!</div>}
 

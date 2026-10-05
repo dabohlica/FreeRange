@@ -95,29 +95,6 @@ export async function downloadFile(
   return { buffer: Buffer.from(await data.arrayBuffer()), contentType: data.type ?? 'application/octet-stream' }
 }
 
-/**
- * Streams a stored file instead of buffering it, for large transfers like exports.
- * Supabase's SDK only returns a Blob, so that path still holds one file in memory.
- */
-export async function downloadFileStream(filename: string): Promise<ReadableStream<Uint8Array>> {
-  if (isR2()) {
-    const res = await r2Client().send(
-      new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME!, Key: filename }),
-    )
-    if (!res.Body) throw new Error(`File not found in R2: ${filename}`)
-    return res.Body.transformToWebStream() as ReadableStream<Uint8Array>
-  }
-
-  const { createClient } = await import('@supabase/supabase-js')
-  const supabase = createClient(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  )
-  const { data, error } = await supabase.storage.from('media').download(filename)
-  if (error || !data) throw new Error(`Storage download failed: ${error?.message}`)
-  return data.stream()
-}
-
 export async function deleteFile(filename: string): Promise<void> {
   if (isR2()) {
     await r2Client().send(
