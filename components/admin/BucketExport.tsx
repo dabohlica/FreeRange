@@ -17,6 +17,8 @@ interface BucketObject {
 // Everything except the secret is remembered on this device
 const STORAGE_KEY = 'freerange-bucket-export'
 const CONCURRENCY = 4
+// Browsers without folder access get ZIPs built in memory, so keep each one modest
+const ZIP_PART_BYTES = 500 * 1024 * 1024
 
 type DirectoryPickerWindow = Window & {
   showDirectoryPicker: (opts?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>
@@ -27,9 +29,28 @@ function formatBytes(bytes: number) {
   return `${Math.round(bytes / 1024 ** 2)} MB`
 }
 
+/** The R2 dashboard shows the S3 URL with the bucket appended; drop it so it isn't doubled. */
+function baseEndpoint(s: S3Settings) {
+  const endpoint = s.endpoint.replace(/\/+$/, '')
+  const suffix = `/${s.bucket}`
+  return s.bucket && endpoint.endsWith(suffix) ? endpoint.slice(0, -suffix.length) : endpoint
+}
+
 function objectUrl(s: S3Settings, key?: string) {
-  const base = `${s.endpoint.replace(/\/$/, '')}/${encodeURIComponent(s.bucket)}`
+  const base = `${baseEndpoint(s)}/${encodeURIComponent(s.bucket)}`
   return key ? `${base}/${key.split('/').map(encodeURIComponent).join('/')}` : base
+}
+
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  // Give the browser time to start the download before releasing the memory
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
 export default function BucketExport() {
@@ -62,17 +83,64 @@ export default function BucketExport() {
   const update = (field: keyof S3Settings) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setSettings((s) => ({ ...s, [field]: e.target.value.trim() }))
 
+  /** Fallback for browsers without folder access: build ZIP parts in memory and download each one. */
+  const downloadAsZips = async (client: import('aws4fetch').AwsClient, objects: BucketObject[]) => {
+    const { makeZip } = await import('client-zip')
+
+    const parts: BucketObject[][] = []
+    let current: BucketObject[] = []
+    let currentBytes = 0
+    for (const obj of objects) {
+      if (current.length > 0 && currentBytes + obj.size > ZIP_PART_BYTES) {
+        parts.push(current)
+        current = []
+        currentBytes = 0
+      }
+      current.push(obj)
+      currentBytes += obj.size
+    }
+    if (current.length > 0) parts.push(current)
+
+    for (let i = 0; i < parts.length && !cancelRef.current; i++) {
+      setStatus(`Building ZIP ${i + 1} of ${parts.length}…`)
+      const files = parts[i]
+      async function* entries() {
+        for (const obj of files) {
+          if (cancelRef.current) return
+          try {
+            const res = await client.fetch(objectUrl(settings, obj.key))
+            if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+            yield { name: obj.key, input: res.body }
+          } catch (err) {
+            setFailed((f) => [...f, `${obj.key}: ${(err as Error).message}`])
+          }
+          setProgress((p) => ({ ...p, files: p.files + 1, bytes: p.bytes + obj.size }))
+        }
+      }
+      const blob = await new Response(makeZip(entries())).blob()
+      if (cancelRef.current) break
+      saveBlob(blob, parts.length === 1
+        ? `${settings.bucket}.zip`
+        : `${settings.bucket}-part-${i + 1}-of-${parts.length}.zip`)
+    }
+
+    setStatus(cancelRef.current ? 'Cancelled.' : 'Done.')
+  }
+
   const run = async () => {
     setError(null)
     setFailed([])
     setStatus(null)
     cancelRef.current = false
 
-    let root: FileSystemDirectoryHandle
-    try {
-      root = await (window as unknown as DirectoryPickerWindow).showDirectoryPicker({ mode: 'readwrite' })
-    } catch {
-      return // picker dismissed
+    // Folder mode where the browser supports it, otherwise fall back to ZIP downloads
+    let root: FileSystemDirectoryHandle | null = null
+    if (supported) {
+      try {
+        root = await (window as unknown as DirectoryPickerWindow).showDirectoryPicker({ mode: 'readwrite' })
+      } catch {
+        return // picker dismissed
+      }
     }
 
     try {
@@ -115,10 +183,16 @@ export default function BucketExport() {
       setProgress({ files: 0, totalFiles: objects.length, bytes: 0, totalBytes, skipped: 0 })
       setStatus('Downloading…')
 
+      if (!root) {
+        await downloadAsZips(client, objects)
+        return
+      }
+      const rootDir = root
+
       // 2. Download each object into the chosen folder, mirroring the key's path
       const dirs = new Map<string, Promise<FileSystemDirectoryHandle>>()
       const getDir = (parts: string[]): Promise<FileSystemDirectoryHandle> => {
-        if (parts.length === 0) return Promise.resolve(root)
+        if (parts.length === 0) return Promise.resolve(rootDir)
         const key = parts.join('/')
         if (!dirs.has(key)) {
           dirs.set(key, getDir(parts.slice(0, -1)).then((parent) =>
@@ -183,7 +257,7 @@ export default function BucketExport() {
   const cliCommand =
     `AWS_ACCESS_KEY_ID=${settings.accessKeyId || '<key-id>'} AWS_SECRET_ACCESS_KEY=<secret> ` +
     `AWS_DEFAULT_REGION=${settings.region || 'auto'} ` +
-    `aws s3 sync s3://${settings.bucket || '<bucket>'} ./freerange-backup --endpoint-url ${settings.endpoint || '<endpoint>'}`
+    `aws s3 sync s3://${settings.bucket || '<bucket>'} ./freerange-backup --endpoint-url ${baseEndpoint(settings) || '<endpoint>'}`
 
   const input = 'w-full px-3 py-2 rounded-lg border border-[#e5e5e5] text-sm text-[#171717] bg-white focus:outline-none focus:border-[#171717]'
 
@@ -223,10 +297,10 @@ export default function BucketExport() {
         <button
           type="button"
           onClick={run}
-          disabled={running || !supported || !settings.endpoint || !settings.bucket || !settings.accessKeyId || !secret}
+          disabled={running || !settings.endpoint || !settings.bucket || !settings.accessKeyId || !secret}
           className="px-4 py-2 bg-emerald-600 text-white rounded disabled:opacity-50"
         >
-          {running ? 'Downloading…' : 'Choose folder & download'}
+          {running ? 'Downloading…' : supported ? 'Choose folder & download' : 'Download as ZIP'}
         </button>
         {running && (
           <button type="button" onClick={() => { cancelRef.current = true }}
@@ -238,8 +312,9 @@ export default function BucketExport() {
       </div>
 
       {!supported && (
-        <p className="mt-2 text-sm text-[#b45309]">
-          This browser can&apos;t save into a folder. Use Chrome or Edge on desktop, or the command below.
+        <p className="mt-2 text-sm text-[#737373]">
+          This browser can&apos;t save into a folder, so the bucket downloads as ZIP files of up to 500 MB each.
+          Allow multiple downloads if the browser asks. Chrome or Edge on desktop can save straight into a folder instead.
         </p>
       )}
 

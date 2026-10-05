@@ -27,6 +27,7 @@
     "bcryptjs": "^3.0.3",
     "blurhash": "^2.0.5",
     "class-variance-authority": "^0.7.1",
+    "client-zip": "^2.5.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.4.2",
     "exifr": "^7.1.3",
