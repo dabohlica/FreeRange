@@ -62,6 +62,7 @@ export default function BucketExport() {
   const [failed, setFailed] = useState<string[]>([])
   const [progress, setProgress] = useState({ files: 0, totalFiles: 0, bytes: 0, totalBytes: 0, skipped: 0 })
   const [supported, setSupported] = useState(true)
+  const [includeVideos, setIncludeVideos] = useState(false)
   const cancelRef = useRef(false)
 
   // Prefill from this device, else from the server's storage config
@@ -120,8 +121,8 @@ export default function BucketExport() {
       const blob = await new Response(makeZip(entries())).blob()
       if (cancelRef.current) break
       saveBlob(blob, parts.length === 1
-        ? `${settings.bucket}.zip`
-        : `${settings.bucket}-part-${i + 1}-of-${parts.length}.zip`)
+        ? `${settings.bucket}-originals.zip`
+        : `${settings.bucket}-originals-part-${i + 1}-of-${parts.length}.zip`)
     }
 
     setStatus(cancelRef.current ? 'Cancelled.' : 'Done.')
@@ -157,7 +158,17 @@ export default function BucketExport() {
         region: settings.region || 'auto',
       })
 
-      // 1. List every object in the bucket
+      // 1. Ask the app which storage keys are original uploads — the bucket also
+      //    holds generated thumbnails, resized copies and video poster frames
+      setStatus('Loading list of originals…')
+      const originalsRes = await fetch('/api/admin/export')
+      if (!originalsRes.ok) throw new Error(`Could not load the list of originals (${originalsRes.status})`)
+      const { originals } = await originalsRes.json() as { originals: { key: string; type: string }[] }
+      const wanted = new Set(
+        originals.filter((o) => o.type === 'IMAGE' || includeVideos).map((o) => o.key),
+      )
+
+      // 2. List the bucket, keeping only the originals
       setStatus('Listing bucket…')
       const objects: BucketObject[] = []
       let token: string | null = null
@@ -172,12 +183,19 @@ export default function BucketExport() {
         for (const el of Array.from(xml.getElementsByTagName('Contents'))) {
           const key = el.getElementsByTagName('Key')[0]?.textContent ?? ''
           const size = Number(el.getElementsByTagName('Size')[0]?.textContent ?? 0)
-          if (key && !key.endsWith('/')) objects.push({ key, size })
+          if (wanted.has(key)) objects.push({ key, size })
         }
         const truncated = xml.getElementsByTagName('IsTruncated')[0]?.textContent === 'true'
         token = truncated ? xml.getElementsByTagName('NextContinuationToken')[0]?.textContent ?? null : null
-        setStatus(`Listing bucket… ${objects.length} files found`)
+        setStatus(`Listing bucket… ${objects.length} originals found`)
       } while (token && !cancelRef.current)
+
+      // Originals recorded in the database but absent from the bucket
+      if (!cancelRef.current) {
+        const found = new Set(objects.map((o) => o.key))
+        const missing = [...wanted].filter((k) => !found.has(k))
+        if (missing.length > 0) setFailed(missing.map((k) => `${k}: not found in bucket`))
+      }
 
       const totalBytes = objects.reduce((n, o) => n + o.size, 0)
       setProgress({ files: 0, totalFiles: objects.length, bytes: 0, totalBytes, skipped: 0 })
@@ -257,15 +275,17 @@ export default function BucketExport() {
   const cliCommand =
     `AWS_ACCESS_KEY_ID=${settings.accessKeyId || '<key-id>'} AWS_SECRET_ACCESS_KEY=<secret> ` +
     `AWS_DEFAULT_REGION=${settings.region || 'auto'} ` +
-    `aws s3 sync s3://${settings.bucket || '<bucket>'} ./freerange-backup --endpoint-url ${baseEndpoint(settings) || '<endpoint>'}`
+    `aws s3 sync s3://${settings.bucket || '<bucket>'} ./freerange-originals --endpoint-url ${baseEndpoint(settings) || '<endpoint>'} ` +
+    `--exclude "thumb_*" --exclude "mid_*" --exclude "web_*"`
 
   const input = 'w-full px-3 py-2 rounded-lg border border-[#e5e5e5] text-sm text-[#171717] bg-white focus:outline-none focus:border-[#171717]'
 
   return (
     <div className="mt-4 pt-4 border-t">
-      <h3 className="font-medium text-[#171717]">Download entire bucket</h3>
+      <h3 className="font-medium text-[#171717]">Download original images</h3>
       <p className="mt-1 text-sm text-[#737373]">
-        Downloads every file in the bucket straight from storage to a folder on this computer — nothing goes through the app server.
+        Downloads the full-resolution originals as uploaded — no thumbnails or resized copies — straight from storage
+        to this computer. Nothing goes through the app server.
         Your secret key is only used in this browser and is never saved or sent to the server.
       </p>
 
@@ -292,6 +312,12 @@ export default function BucketExport() {
           <input className={input} type="password" value={secret} onChange={(e) => setSecret(e.target.value.trim())} autoComplete="off" />
         </label>
       </div>
+
+      <label className="mt-3 flex items-center gap-2 text-sm text-[#737373] cursor-pointer select-none">
+        <input type="checkbox" checked={includeVideos} onChange={(e) => setIncludeVideos(e.target.checked)}
+          className="w-4 h-4 accent-[#171717]" />
+        Include original videos
+      </label>
 
       <div className="mt-3 flex gap-2 items-center flex-wrap">
         <button
@@ -340,7 +366,8 @@ export default function BucketExport() {
         </p>
         <pre className="mt-1 p-2 bg-[#f5f5f4] rounded text-xs overflow-auto">{corsPolicy}</pre>
         <p className="mt-2">
-          Use a read-only API token (R2: “Object Read only”). Or skip the browser and sync with the AWS CLI:
+          Use a read-only API token (R2: “Object Read only”). Or skip the browser and sync with the AWS CLI
+          (this skips resized copies by name, but still includes videos and their poster frames):
         </p>
         <pre className="mt-1 p-2 bg-[#f5f5f4] rounded text-xs overflow-auto whitespace-pre-wrap break-all">{cliCommand}</pre>
       </details>
