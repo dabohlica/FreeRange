@@ -6,6 +6,7 @@ import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { useDropzone } from 'react-dropzone'
 import { formatDate, formatFileSize } from '@/lib/utils'
+import BucketExport from '@/components/admin/BucketExport'
 
 const LocationPicker = dynamic(() => import('@/components/admin/LocationPicker'), { ssr: false })
 
@@ -868,6 +869,7 @@ export default function AdminClient({ initialEntries, initialTrips }: { initialE
                   </span>
                 )}
               </div>
+              <BucketExport />
             </div>
             {entries.length === 0 && <div className="text-center py-16 text-[#a3a3a3]">No entries yet. Create your first entry!</div>}
 
